@@ -16,7 +16,7 @@ internal class AdbServerClient(private val port: Int = 5037) {
 
     private fun connect(): Socket = Socket().apply {
         try {
-            connect(InetSocketAddress("127.0.0.1", port), 3000)
+            connect(InetSocketAddress("127.0.0.1", this@AdbServerClient.port), 3000)
             soTimeout = 15000
         } catch (e: Exception) {
             close()
