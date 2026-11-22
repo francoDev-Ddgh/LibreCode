@@ -1,0 +1,54 @@
+name: Build and publish release APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Prepare release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          CONFIG_STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          CONFIG_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          CONFIG_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/release.jks"
+          if [[ -n "$KEYSTORE_BASE64" ]]; then
+            if [[ -z "$CONFIG_STORE_PASSWORD" || -z "$CONFIG_KEY_ALIAS" || -z "$CONFIG_KEY_PASSWORD" ]]; then
+              echo 'All four RELEASE_KEYSTORE_* / RELEASE_KEY_* secrets are required.' >&2; exit 1
+            fi
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$KEY_PATH"
+            STORE_PASSWORD="$CONFIG_STORE_PASSWORD"; KEY_ALIAS="$CONFIG_KEY_ALIAS"; KEY_PASSWORD="$CONFIG_KEY_PASSWORD"
+          else
+            echo 'No keystore secret: generating a temporary release key. Future builds will not update this installation.'
+            STORE_PASSWORD="$(openssl rand -hex 24)"; KEY_PASSWORD="$STORE_PASSWORD"; KEY_ALIAS=librecode
+            keytool -genkeypair -v -keystore "$KEY_PATH" -storetype JKS -storepass "$STORE_PASSWORD" -keypass "$KEY_PASSWORD" -alias "$KEY_ALIAS" -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=LibreCode Release, O=LibreCode, C=US'
+          fi
+          echo "::add-mask::$STORE_PASSWORD"; echo "::add-mask::$KEY_PASSWORD"
+          echo "RELEASE_KEYSTORE_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+          echo "RELEASE_KEYSTORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "RELEASE_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+      - name: Assemble optimized release
+        run: gradle --no-daemon :app:assembleRelease
+      - name: Publish release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/release/app-release.apk LibreCode-release.apk
+          gh release create "build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" LibreCode-release.apk --target "$GITHUB_SHA" --title "LibreCode release ${GITHUB_RUN_NUMBER}" --notes "APK release optimizado con R8. Si no se configuró un certificado persistente, esta compilación usa una firma temporal."
