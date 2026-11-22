@@ -59,6 +59,18 @@ internal class GitHubAccount(context: Context) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
         return JSONObject(String(cipher.doFinal(bytes.copyOfRange(12, bytes.size)), Charsets.UTF_8))
     }
+    fun validatePat(value: String) {
+        require(value.isNotBlank() && value.length <= 1024 && value.none { it.isWhitespace() }) { "PAT inválido" }
+        val c = URL("https://api.github.com/user").openConnection() as HttpURLConnection
+        try {
+            c.requestMethod = "GET"; c.connectTimeout = 15000; c.readTimeout = 30000; c.instanceFollowRedirects = false
+            c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("Authorization", "Bearer $value")
+            c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            if (c.responseCode !in 200..299) throw IllegalStateException("PAT no aceptado por GitHub")
+            val user = JSONObject(c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            require(user.optString("login").isNotBlank()) { "Respuesta GitHub inválida" }
+        } finally { c.disconnect() }
+    }
     fun hasSession() = prefs.contains("encrypted")
     @Synchronized fun clear() { prefs.edit().remove("encrypted").commit() }
     @Synchronized private fun token(): String {

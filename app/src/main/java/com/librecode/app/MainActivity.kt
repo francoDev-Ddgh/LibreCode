@@ -141,6 +141,47 @@ class MainActivity : Activity() {
     }
     private val githubAccount by lazy { GitHubAccount(applicationContext) }
     private fun showGithubLogin() {
+        if (githubAccount.hasSession()) { showGithubOAuth(); return }
+        val dialog = android.app.Dialog(this)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = shape(bg, 22); setPadding(dp(22), dp(20), dp(22), dp(18)) }
+        box.addView(text("Conectar GitHub", 21f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
+        box.addView(text("Conecta tu cuenta con GitHub o pega un token personal. LibreCode lo guarda cifrado y lo usa internamente: no se envía al modelo.", 14f, muted).apply { setPadding(0, dp(12), 0, dp(12)) })
+        box.addView(button("Continuar con GitHub").apply { setOnClickListener { dialog.dismiss(); showGithubOAuth() } }, LinearLayout.LayoutParams(-1, -2))
+        box.addView(button("Usar token personal · PAT").apply { setOnClickListener { dialog.dismiss(); showGithubPat() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        box.addView(button("Cancelar").apply { setOnClickListener { dialog.dismiss() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        dialog.setContentView(box); dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.show(); dialog.window?.setLayout((resources.displayMetrics.widthPixels * .88f).toInt(), -2)
+    }
+    private fun showGithubPat() {
+        val dialog = android.app.Dialog(this)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = shape(bg, 22); setPadding(dp(22), dp(20), dp(22), dp(18)) }
+        box.addView(text("Token personal de GitHub", 21f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
+        box.addView(text("Usa un PAT con acceso a los repositorios necesarios y permiso Contents de lectura y escritura. Para editar workflows, GitHub puede exigir permisos adicionales. El modelo usa la conexión, pero no recibe el token.", 14f, muted).apply { setPadding(0, dp(12), 0, dp(12)) })
+        val input = EditText(this).apply {
+            hint = "Pega tu PAT"; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            setSingleLine(true); setPadding(dp(12), dp(10), dp(12), dp(10)); background = shape(Color.WHITE, 12)
+            importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
+        }
+        box.addView(input, LinearLayout.LayoutParams(-1, -2))
+        val saveButton = button("Validar y guardar")
+        saveButton.setOnClickListener {
+            val token = input.text.toString().trim()
+            if (token.isBlank()) { input.error = "Pega el token"; return@setOnClickListener }
+            saveButton.isEnabled = false
+            Thread {
+                try {
+                    githubAccount.validatePat(token)
+                    githubAccount.save(JSONObject().put("access_token", token).put("token_type", "bearer"))
+                    runOnUiThread { input.text.clear(); if (!isDestroyed && dialog.isShowing) dialog.dismiss(); Toast.makeText(applicationContext, "Token de GitHub guardado cifrado.", Toast.LENGTH_LONG).show() }
+                } catch (_: Exception) { runOnUiThread { if (!isDestroyed && dialog.isShowing) { saveButton.isEnabled = true; Toast.makeText(this, "No se pudo validar o guardar el token. Revisa la conexión y el PAT.", Toast.LENGTH_LONG).show() } } }
+            }.start()
+        }
+        box.addView(saveButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        box.addView(button("Cancelar").apply { setOnClickListener { if (saveButton.isEnabled) { input.text.clear(); dialog.dismiss() } } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+        dialog.setCancelable(false); dialog.setContentView(box); dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.show(); dialog.window?.setLayout((resources.displayMetrics.widthPixels * .88f).toInt(), -2)
+    }
+    private fun showGithubOAuth() {
         if (githubAccount.hasSession()) {
             AlertDialog.Builder(this).setTitle("GitHub conectado").setMessage("Puedes cerrar la sesión guardada en este dispositivo.")
                 .setPositiveButton("Cerrar sesión") { _, _ -> githubAccount.clear(); Toast.makeText(this, "Sesión local eliminada. Puedes revocar el acceso desde GitHub.", Toast.LENGTH_LONG).show() }
