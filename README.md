@@ -1,6 +1,6 @@
 # LibreCode
 
-Chat Android sencillo en Kotlin con Google Gemini, Anthropic, DeepSeek, Kimi y OpenAI. El menú ☰ de la izquierda permite iniciar un chat y abrir el historial local. Mantén pulsado un chat en el historial para borrarlo. Las conversaciones se guardan en un archivo privado, **sin cifrar**, después de recibir una respuesta; la conversación pendiente se puede perder si se cierra la app. Al abrir un chat anterior se usa el proveedor configurado actualmente: su contenido se envía a ese proveedor cuando se envía un nuevo mensaje.
+Chat Android sencillo en Kotlin con Google Gemini, Anthropic, DeepSeek, Kimi y OpenAI. El botón ☰ abre un panel lateral desde la izquierda con el historial local, el botón de nuevo chat y la configuración. Mantén pulsado un chat en el panel para borrarlo. Las conversaciones se guardan en un archivo privado, **sin cifrar**, después de recibir una respuesta; la conversación pendiente se puede perder si se cierra la app. Al abrir un chat anterior se usa el proveedor configurado actualmente: su contenido se envía a ese proveedor cuando se envía un nuevo mensaje.
 
 El texto del asistente se muestra en Markdown: cursiva, negrita, listas, enlaces, tablas GFM y bloques de código. No hay streaming, adjuntos ni herramientas por ahora.
 

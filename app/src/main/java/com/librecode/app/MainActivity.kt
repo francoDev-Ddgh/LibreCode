@@ -32,6 +32,8 @@ class MainActivity : Activity() {
     private val accent = Color.rgb(195, 101, 72)
     private val panel = Color.rgb(238, 236, 228)
     private lateinit var root: LinearLayout
+    private lateinit var screen: FrameLayout
+    private var drawerOverlay: FrameLayout? = null
     private lateinit var transcript: LinearLayout
     private lateinit var scroller: ScrollView
     private lateinit var composer: EditText
@@ -84,12 +86,13 @@ class MainActivity : Activity() {
             }
             insets
         }
-        setContentView(root)
+        screen = FrameLayout(this).apply { addView(root) }
+        setContentView(screen)
         loadHistory()
         buildScreen()
         val restoredId = savedInstanceState?.getString("chatId")
         chats.find { it.id == restoredId }?.let { openChat(it) }
-        showProviderDialog()
+        if (prefs.getString("key", "").isNullOrBlank()) showProviderDialog()
     }
     private fun dp(n: Int) = (resources.displayMetrics.density * n).toInt()
     private fun shape(color: Int, radius: Int = 18) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius).toFloat() }
@@ -99,7 +102,7 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(10), dp(16), dp(10)) }
         val menu = text("☰", 23f, muted).apply {
             gravity = Gravity.CENTER; contentDescription = "Abrir menú e historial"
-            background = shape(bg, 14); setOnClickListener { if (!busy) showMenu(this) else Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() }
+            background = shape(bg, 14); setOnClickListener { showDrawer() }
         }
         header.addView(menu, LinearLayout.LayoutParams(dp(44), dp(44)))
         val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
@@ -107,7 +110,10 @@ class MainActivity : Activity() {
         title = text("Tu espacio para pensar", 12f, muted)
         brand.addView(title)
         header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(button("Configurar").apply { setOnClickListener { if (!busy) showProviderDialog() } }, LinearLayout.LayoutParams(-2, dp(42)))
+        header.addView(text("＋", 26f, muted).apply {
+            gravity = Gravity.CENTER; contentDescription = "Nueva conversación"
+            setOnClickListener { if (!busy) newChat() else Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() }
+        }, LinearLayout.LayoutParams(dp(44), dp(44)))
         root.addView(header)
         scroller = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
         transcript = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(18), dp(22), dp(18)) }
@@ -152,41 +158,89 @@ class MainActivity : Activity() {
         transcript.removeAllViews()
         if (messages.isEmpty()) showWelcome() else messages.forEach { (role, value) -> addMessage(role, value) }
     }
-    private fun showMenu(anchor: View) {
-        val popup = PopupMenu(this, anchor)
-        popup.menu.add("＋  Nueva conversación").setOnMenuItemClickListener { newChat(); true }
-        popup.menu.add("☰  Historial (${chats.size})").setOnMenuItemClickListener { showHistory(); true }
-        popup.show()
+    private fun closeDrawer() {
+        val overlay = drawerOverlay ?: return
+        drawerOverlay = null
+        screen.removeView(overlay)
     }
+    private fun showDrawer() {
+        if (drawerOverlay != null) return
+        val overlay = FrameLayout(this)
+        val shade = View(this).apply {
+            setBackgroundColor(Color.argb(95, 20, 19, 17)); contentDescription = "Cerrar panel"
+            setOnClickListener { closeDrawer() }
+        }
+        overlay.addView(shade, FrameLayout.LayoutParams(-1, -1))
+        val drawer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(243, 241, 234))
+            elevation = dp(12).toFloat(); isClickable = true
+        }
+        val insets = root.rootWindowInsets
+        val topInset = if (insets != null) {
+            if (Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()).top
+            else @Suppress("DEPRECATION") insets.systemWindowInsetTop
+        } else 0
+        val bottomInset = if (insets != null) {
+            if (Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.systemBars()).bottom
+            else @Suppress("DEPRECATION") insets.systemWindowInsetBottom
+        } else 0
+        drawer.setPadding(dp(16), topInset + dp(12), dp(16), bottomInset + dp(12))
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        header.addView(text("✳  LibreCode", 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(text("×", 27f, muted).apply { gravity = Gravity.CENTER; contentDescription = "Cerrar panel"; setOnClickListener { closeDrawer() } }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        drawer.addView(header)
+        val new = text("＋   Nuevo chat", 16f, ink).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(10), 0); background = shape(Color.WHITE, 12)
+            setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else { newChat(); closeDrawer() } }
+        }
+        drawer.addView(new, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(18); bottomMargin = dp(22) })
+        drawer.addView(text("RECIENTES", 11f, muted).apply { typeface = Typeface.DEFAULT_BOLD; setPadding(dp(12), 0, 0, dp(10)) })
+        val scroll = ScrollView(this).apply { isFillViewport = false }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val ordered = chats.sortedByDescending { it.time }
+        if (ordered.isEmpty()) list.addView(text("Tus conversaciones aparecerán aquí.", 14f, muted).apply { setPadding(dp(12), dp(12), dp(8), 0) })
+        ordered.forEach { chat ->
+            val item = text(chat.title, 15f, ink).apply {
+                maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(10), dp(8), dp(10))
+                if (chat.id == chatId) background = shape(Color.rgb(229, 226, 216), 10)
+                contentDescription = "Abrir conversación: ${chat.title}. Mantén pulsado para eliminar."
+                setOnClickListener {
+                    if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show()
+                    else { openChat(chat); closeDrawer(); Toast.makeText(this@MainActivity, "Se usará el proveedor configurado actualmente.", Toast.LENGTH_SHORT).show() }
+                }
+                setOnLongClickListener {
+                    if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show()
+                    else AlertDialog.Builder(this@MainActivity).setTitle("Eliminar conversación")
+                        .setMessage("¿Eliminar «${chat.title}» del dispositivo?")
+                        .setPositiveButton("Eliminar") { _, _ -> chats.removeAll { it.id == chat.id }; saveHistory(); if (chatId == chat.id) newChat(); closeDrawer(); showDrawer() }
+                        .setNegativeButton("Cancelar", null).show()
+                    true
+                }
+            }
+            list.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(3) })
+        }
+        scroll.addView(list)
+        drawer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        drawer.addView(text("Mantén pulsado un chat para eliminarlo", 11f, muted).apply { setPadding(dp(12), dp(10), 0, dp(10)) })
+        drawer.addView(text("⚙   Configurar proveedor", 15f, ink).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(10), 0, dp(10))
+            setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else { closeDrawer(); showProviderDialog() } }
+        })
+        val width = minOf(dp(315), (resources.displayMetrics.widthPixels * .86f).toInt())
+        overlay.addView(drawer, FrameLayout.LayoutParams(width, -1, Gravity.START))
+        screen.addView(overlay, FrameLayout.LayoutParams(-1, -1))
+        drawerOverlay = overlay
+        drawer.translationX = -width.toFloat()
+        drawer.animate().translationX(0f).setDuration(200).start()
+    }
+    @Deprecated("Deprecated in Android")
+    override fun onBackPressed() { if (drawerOverlay != null) closeDrawer() else super.onBackPressed() }
     private fun newChat() {
         chatId = UUID.randomUUID().toString(); messages.clear(); composer.setText(""); showWelcome()
     }
     private fun openChat(chat: Chat) {
         chatId = chat.id; messages.clear(); messages.addAll(chat.entries); composer.setText(""); renderConversation()
-    }
-    private fun showHistory() {
-        if (chats.isEmpty()) { Toast.makeText(this, "Aún no hay conversaciones guardadas.", Toast.LENGTH_SHORT).show(); return }
-        val ordered = chats.sortedByDescending { it.time }
-        val labels = ordered.map { it.title }.toTypedArray()
-        val dialog = AlertDialog.Builder(this).setTitle("Historial local")
-            .setItems(labels) { _, which -> openChat(ordered[which]); Toast.makeText(this, "Se usará el proveedor configurado actualmente.", Toast.LENGTH_SHORT).show() }
-            .setNegativeButton("Cerrar", null).create()
-        dialog.setOnShowListener {
-            dialog.listView.setOnItemLongClickListener { _, _, position, _ ->
-                val chat = ordered[position]
-                AlertDialog.Builder(this).setTitle("Eliminar conversación")
-                    .setMessage("¿Eliminar «${chat.title}» del dispositivo?")
-                    .setPositiveButton("Eliminar") { _, _ ->
-                        chats.removeAll { it.id == chat.id }
-                        saveHistory()
-                        if (chatId == chat.id) newChat()
-                        dialog.dismiss()
-                    }.setNegativeButton("Cancelar", null).show()
-                true
-            }
-        }
-        dialog.show()
-        Toast.makeText(this, "Mantén pulsada una conversación para eliminarla.", Toast.LENGTH_LONG).show()
     }
     private fun loadHistory() {
         if (!historyFile.baseFile.exists()) return
