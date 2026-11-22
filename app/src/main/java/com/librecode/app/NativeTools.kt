@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit
 
 /** Internal-only executable runner; argument arrays are passed directly, never through a shell. */
 internal class NativeTools(private val context: Context) {
-    private val allowed = setOf("adb", "fastboot", "curl", "sqlite3", "etc1tool", "hprof-conv", "e2fsdroid", "sload_f2fs", "mke2fs", "make_f2fs", "make_f2fs_casefold")
+    private val allowed = setOf("curl")
     private fun caBundle(): File {
         val file = File(context.filesDir, "system-ca-bundle.pem")
         if (!file.exists()) {
