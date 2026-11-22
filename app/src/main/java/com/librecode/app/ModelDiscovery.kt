@@ -25,9 +25,10 @@ object ModelDiscovery {
         else if (type != 6 || !url.protocol.equals("http", true)) false
         else {
             val host = url.host.lowercase(Locale.ROOT).removePrefix("[").removeSuffix("]")
-            val octets = host.split('.').mapNotNull { it.toIntOrNull() }
+            val parts = host.split('.')
+            val octets = parts.mapNotNull { it.toIntOrNull() }
             host == "localhost" || host.endsWith(".local") || host == "::1" || host.startsWith("fc") && host.contains(':') || host.startsWith("fd") && host.contains(':') || host.startsWith("fe80:") ||
-                (octets.size == 4 && octets.all { it in 0..255 } && (octets[0] == 10 || octets[0] == 127 || octets[0] == 192 && octets[1] == 168 || octets[0] == 172 && octets[1] in 16..31 || octets[0] == 169 && octets[1] == 254))
+                (parts.size == 4 && octets.size == 4 && octets.all { it in 0..255 } && (octets[0] == 10 || octets[0] == 127 || octets[0] == 192 && octets[1] == 168 || octets[0] == 172 && octets[1] in 16..31 || octets[0] == 169 && octets[1] == 254))
         }
     } catch (_: Exception) { false }
 
