@@ -62,7 +62,16 @@ class MainActivity : Activity() {
     private val messages = mutableListOf<Pair<String, String>>()
     private data class Chat(val id: String, val title: String, val time: Long, val entries: List<Pair<String, String>>)
     private val chats = mutableListOf<Chat>()
-    private val historyFile by lazy { AtomicFile(java.io.File(filesDir, "chats.json")) }
+    private val chatHistoryFile by lazy { AtomicFile(java.io.File(filesDir, WorkspaceHistory.fileName("chat"))) }
+    private val workHistoryFile by lazy { AtomicFile(java.io.File(filesDir, WorkspaceHistory.fileName("work"))) }
+    private val historyFile: AtomicFile get() = if (workspace == "work") workHistoryFile else chatHistoryFile
+    private var workspace = "chat"
+    private data class WorkspaceSession(val chatId: String, val messages: List<Pair<String, String>>, val draft: String)
+    private val sessions = mutableMapOf<String, WorkspaceSession>()
+    private lateinit var modeSwitcher: FrameLayout
+    private lateinit var modeIndicator: View
+    private lateinit var chatLabel: TextView
+    private lateinit var workLabel: TextView
     private var historyAvailable = true
     private var chatId = UUID.randomUUID().toString()
     private val markdown by lazy {
@@ -114,11 +123,12 @@ class MainActivity : Activity() {
         }
         screen = FrameLayout(this).apply { addView(root) }
         setContentView(screen)
+        workspace = if (prefs.getString("workspace", "chat") == "work") "work" else "chat"
         loadHistory()
         loadProviders()
         buildScreen()
         refreshReasoningProfile()
-        val restoredId = savedInstanceState?.getString("chatId")
+        val restoredId = savedInstanceState?.getString("chatId") ?: prefs.getString("last_chat_$workspace", null)
         chats.find { it.id == restoredId }?.let { openChat(it) }
         if (prefs.getString("active_provider_id", null) == null) showSettings("providers")
     }
@@ -127,24 +137,50 @@ class MainActivity : Activity() {
     private fun text(value: String, size: Float, color: Int = ink) = TextView(this).apply { text = value; textSize = size; setTextColor(color) }
     private fun button(label: String) = Button(this).apply { text = label; isAllCaps = false; setTextColor(ink); background = shape(panel, 14); textSize = 14f }
     private fun buildScreen() {
-        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(8), dp(16), dp(8)) }
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(8), dp(14), dp(8)) }
         val menu = text("☰", 23f, muted).apply {
             gravity = Gravity.CENTER; contentDescription = "Abrir menú e historial"
             setOnClickListener { showDrawer() }
         }
-        header.addView(menu, LinearLayout.LayoutParams(dp(44), dp(48)))
-        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(5), 0, dp(6), 0) }
+        header.addView(menu, LinearLayout.LayoutParams(dp(42), dp(52)))
+        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(8), 0) }
         brand.addView(text("LibreCode", 20f).apply { typeface = Typeface.create("serif", Typeface.BOLD); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
-        title = text(prefs.getString("name", "Tu espacio para pensar") ?: "Tu espacio para pensar", 12f, muted).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
-        brand.addView(title)
-        header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
-        modelButton = text("Elegir modelo  ▾", 14f, ink).apply {
-            gravity = Gravity.CENTER; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(dp(10), dp(6), dp(10), dp(6)); background = shape(panel, 14); minHeight = dp(46)
+        title = text(prefs.getString("name", "Tu espacio para pensar") ?: "Tu espacio para pensar", 12f, muted)
+        modelButton = text("Elegir modelo  ▾", 12.5f, ink).apply {
+            gravity = Gravity.CENTER; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(12), dp(7), dp(12), dp(7)); background = shape(panel, 999); minHeight = dp(34)
             contentDescription = "Seleccionar modelo"
             setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else showModelPicker() }
         }
-        header.addView(modelButton, LinearLayout.LayoutParams(0, -2, 1.15f))
+        brand.addView(modelButton, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(5) })
+        header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
+        modeSwitcher = FrameLayout(this).apply {
+            background = shape(panel, 999); isClickable = true; isFocusable = true
+            setOnClickListener { switchWorkspace(if (workspace == "chat") "work" else "chat") }
+        }
+        modeIndicator = View(this).apply { background = shape(Color.WHITE, 999) }
+        modeSwitcher.addView(modeIndicator, FrameLayout.LayoutParams(1, -1).apply { setMargins(dp(3), dp(3), 0, dp(3)) })
+        val labels = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
+        chatLabel = text("Chat", 14f).apply { gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        workLabel = text("Work", 14f).apply { gravity = Gravity.CENTER; importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
+        labels.addView(chatLabel, LinearLayout.LayoutParams(0, -1, 1f)); labels.addView(workLabel, LinearLayout.LayoutParams(0, -1, 1f))
+        modeSwitcher.addView(labels, FrameLayout.LayoutParams(-1, -1))
+        var startX = 0f
+        modeSwitcher.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> { startX = event.x; true }
+                android.view.MotionEvent.ACTION_UP -> {
+                    val delta = event.x - startX
+                    val desired = if (kotlin.math.abs(delta) > dp(18)) { if (delta < 0) "chat" else "work" } else if (event.x < view.width / 2f) "chat" else "work"
+                    if (desired != workspace) view.performClick()
+                    true
+                }
+                android.view.MotionEvent.ACTION_CANCEL -> true
+                else -> true
+            }
+        }
+        modeSwitcher.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateWorkspaceSwitcher(false) }
+        header.addView(modeSwitcher, LinearLayout.LayoutParams(dp(148), dp(44)))
         refreshModelButton()
         root.addView(header)
         scroller = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
@@ -173,6 +209,36 @@ class MainActivity : Activity() {
         bottom.addView(card)
         root.addView(bottom)
         showWelcome()
+    }
+    private fun updateWorkspaceSwitcher(animate: Boolean) {
+        if (!::modeSwitcher.isInitialized || modeSwitcher.width <= 0) return
+        val inset = dp(3); val slot = (modeSwitcher.width - 2 * inset) / 2
+        val params = modeIndicator.layoutParams as FrameLayout.LayoutParams
+        if (params.width != slot) { params.width = slot; modeIndicator.layoutParams = params }
+        val target = if (workspace == "work") slot.toFloat() else 0f
+        modeIndicator.animate().cancel()
+        if (animate) modeIndicator.animate().translationX(target).setDuration(180).start() else modeIndicator.translationX = target
+        chatLabel.setTextColor(if (workspace == "chat") ink else muted); workLabel.setTextColor(if (workspace == "work") ink else muted)
+        chatLabel.typeface = if (workspace == "chat") Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        workLabel.typeface = if (workspace == "work") Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        modeSwitcher.contentDescription = "Cambiar entre Chat y Work. Actual: ${if (workspace == "work") "Work" else "Chat"}"
+    }
+    private fun switchWorkspace(target: String) {
+        if (target == workspace) return
+        if (busy) { Toast.makeText(this, "Espera a que termine la respuesta para cambiar de espacio.", Toast.LENGTH_SHORT).show(); return }
+        sessions[workspace] = WorkspaceSession(chatId, messages.toList(), composer.text.toString())
+        prefs.edit().putString("last_chat_$workspace", chatId).putString("workspace", target).apply()
+        workspace = target
+        chats.clear(); historyAvailable = true; loadHistory()
+        val session = sessions[target]
+        if (session != null) {
+            chatId = session.chatId; messages.clear(); messages.addAll(session.messages); renderConversation(); composer.setText(session.draft)
+        } else {
+            val last = prefs.getString("last_chat_$target", null)
+            val previous = chats.find { it.id == last }
+            if (previous != null) openChat(previous) else newChat()
+        }
+        updateWorkspaceSwitcher(true)
     }
     private fun showWelcome() {
         transcript.removeAllViews(); transcript.gravity = Gravity.CENTER
@@ -247,7 +313,7 @@ class MainActivity : Activity() {
             setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else { newChat(); closeDrawer() } }
         }
         drawer.addView(new, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(18); bottomMargin = dp(22) })
-        drawer.addView(text("RECIENTES", 11f, muted).apply { typeface = Typeface.DEFAULT_BOLD; setPadding(dp(12), 0, 0, dp(10)) })
+        drawer.addView(text(if (workspace == "work") "RECIENTES · WORK" else "RECIENTES · CHAT", 11f, muted).apply { typeface = Typeface.DEFAULT_BOLD; setPadding(dp(12), 0, 0, dp(10)) })
         val scroll = ScrollView(this).apply { isFillViewport = false }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val ordered = chats.sortedByDescending { it.time }
@@ -300,10 +366,10 @@ class MainActivity : Activity() {
         }
     }
     private fun newChat() {
-        chatId = UUID.randomUUID().toString(); messages.clear(); composer.setText(""); showWelcome()
+        chatId = UUID.randomUUID().toString(); messages.clear(); composer.setText(""); prefs.edit().putString("last_chat_$workspace", chatId).apply(); showWelcome()
     }
     private fun openChat(chat: Chat) {
-        chatId = chat.id; messages.clear(); messages.addAll(chat.entries); composer.setText(""); renderConversation()
+        chatId = chat.id; messages.clear(); messages.addAll(chat.entries); composer.setText(""); prefs.edit().putString("last_chat_$workspace", chatId).apply(); renderConversation()
     }
     private fun loadHistory() {
         if (!historyFile.baseFile.exists()) return
