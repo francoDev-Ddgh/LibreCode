@@ -2,6 +2,10 @@ package com.librecode.app
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import android.net.Uri
+import android.os.Environment
+import android.provider.Settings
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -66,6 +70,8 @@ class MainActivity : Activity() {
     private val workHistoryFile by lazy { AtomicFile(java.io.File(filesDir, WorkspaceHistory.fileName("work"))) }
     private val historyFile: AtomicFile get() = if (workspace == "work") workHistoryFile else chatHistoryFile
     private var workspace = "chat"
+    private var chooseFolderAfterPermission = false
+    private val projectFolderRequest = 901
     private data class WorkspaceSession(val chatId: String, val messages: List<Pair<String, String>>, val draft: String)
     private val sessions = mutableMapOf<String, WorkspaceSession>()
     private lateinit var modeSwitcher: FrameLayout
@@ -131,6 +137,54 @@ class MainActivity : Activity() {
         val restoredId = savedInstanceState?.getString("chatId") ?: prefs.getString("last_chat_$workspace", null)
         chats.find { it.id == restoredId }?.let { openChat(it) }
         if (prefs.getString("active_provider_id", null) == null) showSettings("providers")
+    }
+    private fun chooseProjectFolder() {
+        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+            AlertDialog.Builder(this)
+                .setTitle("Acceso al almacenamiento")
+                .setMessage("Work puede solicitar acceso a todos los archivos del almacenamiento compartido para trabajar con proyectos. Android limita el acceso a los datos privados de otras aplicaciones. Después selecciona la carpeta del proyecto.")
+                .setPositiveButton("Abrir permisos") { _, _ ->
+                    chooseFolderAfterPermission = true
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+                    } catch (_: Exception) {
+                        try { startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)) }
+                        catch (_: Exception) { chooseFolderAfterPermission = false; openProjectPicker() }
+                    }
+                }
+                .setNegativeButton("Solo elegir carpeta") { _, _ -> openProjectPicker() }
+                .setNeutralButton("Cancelar", null).show()
+        } else openProjectPicker()
+    }
+    private fun openProjectPicker() {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, projectFolderRequest)
+        } catch (_: Exception) { Toast.makeText(this, "No se pudo abrir el selector de carpetas.", Toast.LENGTH_LONG).show() }
+    }
+    override fun onResume() {
+        super.onResume()
+        if (chooseFolderAfterPermission) { chooseFolderAfterPermission = false; openProjectPicker() }
+    }
+    @Deprecated("Android activity result")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != projectFolderRequest || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        try {
+            val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            require(flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0 && flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0)
+            contentResolver.takePersistableUriPermission(uri, flags)
+            val old = prefs.getString("work_project_uri", null)
+            prefs.edit().putString("work_project_uri", uri.toString()).apply()
+            if (old != null && old != uri.toString()) try {
+                contentResolver.releasePersistableUriPermission(Uri.parse(old), Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            } catch (_: Exception) { }
+            Toast.makeText(this, "Carpeta guardada. La integración de herramientas aún está pendiente.", Toast.LENGTH_LONG).show()
+        } catch (_: Exception) { Toast.makeText(this, "No se pudo guardar el acceso de lectura y escritura a la carpeta.", Toast.LENGTH_LONG).show() }
     }
     private fun dp(n: Int) = (resources.displayMetrics.density * n).toInt()
     private fun shape(color: Int, radius: Int = 18) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius).toFloat() }
@@ -313,6 +367,14 @@ class MainActivity : Activity() {
             setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else { newChat(); closeDrawer() } }
         }
         drawer.addView(new, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(18); bottomMargin = dp(22) })
+        if (workspace == "work") {
+            val folder = text(if (prefs.getString("work_project_uri", null) == null) "📁   Elegir carpeta de proyecto" else "📁   Cambiar carpeta de proyecto", 15f, ink).apply {
+                gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), 0, dp(10), 0); background = shape(Color.WHITE, 12)
+                contentDescription = "Seleccionar carpeta del proyecto Work"
+                setOnClickListener { closeDrawer(); chooseProjectFolder() }
+            }
+            drawer.addView(folder, LinearLayout.LayoutParams(-1, dp(48)).apply { bottomMargin = dp(18) })
+        }
         drawer.addView(text(if (workspace == "work") "RECIENTES · WORK" else "RECIENTES · CHAT", 11f, muted).apply { typeface = Typeface.DEFAULT_BOLD; setPadding(dp(12), 0, 0, dp(10)) })
         val scroll = ScrollView(this).apply { isFillViewport = false }
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
