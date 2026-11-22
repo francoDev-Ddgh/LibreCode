@@ -74,6 +74,7 @@ class MainActivity : Activity() {
             }
         }).build()
     }
+    private val messageRenderer by lazy { ChatMarkdownRenderer(this, markdown) }
     private val prefs by lazy { getSharedPreferences("provider", MODE_PRIVATE) }
     private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI · Responses", "OpenAI · Chat Completions", "Ollama", "Z.ai", "Google Gemma")
     private val urls = arrayOf(
@@ -194,8 +195,12 @@ class MainActivity : Activity() {
         }
         if (!isUser) block.addView(text(if (isError) "ERROR" else "Asistente", 12f, accent).apply { typeface = Typeface.DEFAULT_BOLD })
         val body = text("", 16f).apply { setTextIsSelectable(true); setPadding(0, if (isUser) 0 else dp(8), 0, 0); setLineSpacing(dp(4).toFloat(), 1f) }
-        if (isUser || isError) body.text = content else markdown.setMarkdown(body, content)
+        if (isUser || isError) body.text = content
         block.addView(body)
+        if (!isUser && !isError && content.isNotEmpty()) {
+            body.visibility = View.GONE
+            messageRenderer.render(block, content)
+        }
         val width = if (isUser) (resources.displayMetrics.widthPixels * .80f).toInt() else -1
         row.addView(block, LinearLayout.LayoutParams(width, -2))
         transcript.addView(row, LinearLayout.LayoutParams(-1, -2))
@@ -690,7 +695,9 @@ class MainActivity : Activity() {
                 busy = false; send.isEnabled = true; send.text = "↑"
                 result.fold(onSuccess = { answer ->
                     val follow = isNearBottom()
-                    streamView.setTextColor(ink); markdown.setMarkdown(streamView, answer.text)
+                    val messageBlock = streamView.parent as LinearLayout
+                    messageBlock.removeView(streamView)
+                    messageRenderer.render(messageBlock, answer.text)
                     messages.add("assistant" to answer.text); saveCurrentChat()
                     answer.reasoningTokens?.let { count -> transcript.addView(text("Razonamiento: $count tokens", 11f, muted).apply { setPadding(dp(4), 0, 0, dp(12)) }) }
                     if (follow) scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
