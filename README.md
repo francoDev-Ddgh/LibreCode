@@ -2,7 +2,7 @@
 
 Chat Android sencillo en Kotlin con Google Gemini, Anthropic, DeepSeek, Kimi, OpenAI, Ollama, Z.ai y Google Gemma. El botón ☰ abre un panel lateral desde la izquierda con el historial local, el botón de nuevo chat y **Configuraciones**. Desde Configuraciones puedes elegir **Proveedores**, **Ajustes generales** o **Cambios generales**; las dos últimas pantallas están reservadas para el futuro. Mantén pulsado un chat en el panel para borrarlo. Las conversaciones se guardan en un archivo privado, **sin cifrar**, después de recibir una respuesta; la conversación pendiente se puede perder si se cierra la app. Al abrir un chat anterior se usa el proveedor configurado actualmente: su contenido se envía a ese proveedor cuando se envía un nuevo mensaje.
 
-El texto del asistente se muestra en Markdown: cursiva, negrita, listas, enlaces, tablas GFM y bloques de código. Las respuestas se muestran en streaming; no hay adjuntos ni herramientas por ahora. Un stream interrumpido no se guarda como respuesta completa.
+El chat centra la bienvenida, adapta el encabezado y el selector de modelo al ancho disponible, y mantiene los controles de escritura juntos. El texto del asistente se muestra en Markdown: cursiva, negrita, listas, enlaces, tablas GFM y bloques de código. Las respuestas se muestran en streaming; no hay adjuntos ni herramientas por ahora. Un stream interrumpido no se guarda como respuesta completa.
 
 La configuración del proveedor y la API key se guardan **en texto plano** en SharedPreferences privadas, solo para pruebas. No subas claves al repositorio. Desinstalar la app elimina el historial y la configuración; no hay sincronización ni copia de seguridad.
 

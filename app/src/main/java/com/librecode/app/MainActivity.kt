@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var reasoningButton: TextView
     private var reasoningProfile: EffortProfile? = null
     private var reasoningLoading = false
+    private var lastKeyboardInset = 0
     private var reasoningVersion = 0
     private data class Reply(val text: String, val reasoningTokens: Int?)
     private val scanHandler = Handler(Looper.getMainLooper())
@@ -98,7 +99,12 @@ class MainActivity : Activity() {
             if (Build.VERSION.SDK_INT >= 30) {
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
                 val ime = insets.getInsets(WindowInsets.Type.ime())
+                val wasNearBottom = ::scroller.isInitialized && isNearBottom()
                 v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
+                if (::scroller.isInitialized && ime.bottom != lastKeyboardInset && messages.isNotEmpty() && wasNearBottom) {
+                    scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
+                }
+                lastKeyboardInset = ime.bottom
             } else {
                 @Suppress("DEPRECATION")
                 v.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
@@ -120,53 +126,64 @@ class MainActivity : Activity() {
     private fun text(value: String, size: Float, color: Int = ink) = TextView(this).apply { text = value; textSize = size; setTextColor(color) }
     private fun button(label: String) = Button(this).apply { text = label; isAllCaps = false; setTextColor(ink); background = shape(panel, 14); textSize = 14f }
     private fun buildScreen() {
-        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(10), dp(16), dp(10)) }
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(8), dp(16), dp(8)) }
         val menu = text("☰", 23f, muted).apply {
             gravity = Gravity.CENTER; contentDescription = "Abrir menú e historial"
-            background = shape(bg, 14); setOnClickListener { showDrawer() }
+            setOnClickListener { showDrawer() }
         }
-        header.addView(menu, LinearLayout.LayoutParams(dp(44), dp(44)))
-        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
-        brand.addView(text("LibreCode", 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
-        title = text(prefs.getString("name", "Tu espacio para pensar") ?: "Tu espacio para pensar", 12f, muted)
+        header.addView(menu, LinearLayout.LayoutParams(dp(44), dp(48)))
+        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(5), 0, dp(6), 0) }
+        brand.addView(text("LibreCode", 20f).apply { typeface = Typeface.create("serif", Typeface.BOLD); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
+        title = text(prefs.getString("name", "Tu espacio para pensar") ?: "Tu espacio para pensar", 12f, muted).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         brand.addView(title)
         header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
         modelButton = text("Elegir modelo  ▾", 14f, ink).apply {
-            gravity = Gravity.CENTER; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(dp(12), 0, dp(12), 0); background = shape(panel, 14); contentDescription = "Seleccionar modelo"
+            gravity = Gravity.CENTER; maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(10), dp(6), dp(10), dp(6)); background = shape(panel, 14); minHeight = dp(46)
+            contentDescription = "Seleccionar modelo"
             setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else showModelPicker() }
         }
-        header.addView(modelButton, LinearLayout.LayoutParams(dp(140), dp(42)))
+        header.addView(modelButton, LinearLayout.LayoutParams(0, -2, 1.15f))
         refreshModelButton()
         root.addView(header)
         scroller = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        transcript = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(18), dp(22), dp(18)) }
+        transcript = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(14), dp(20), dp(14)) }
         scroller.addView(transcript)
         root.addView(scroller, LinearLayout.LayoutParams(-1, 0, 1f))
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(12)) }
-        val row = LinearLayout(this).apply { gravity = Gravity.BOTTOM; background = shape(Color.WHITE, 22); setPadding(dp(12), dp(7), dp(7), dp(7)); elevation = dp(2).toFloat() }
-        composer = EditText(this).apply { hint = "¿En qué puedo ayudarte?"; textSize = 16f; setTextColor(ink); setHintTextColor(muted); background = null; minLines = 1; maxLines = 5; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES; setPadding(dp(8), dp(12), dp(8), dp(12)) }
-        row.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-        send = button("↑").apply { contentDescription = "Enviar mensaje"; textSize = 22f; setTextColor(Color.WHITE); background = shape(accent, 13); setOnClickListener { sendMessage() } }
-        row.addView(send, LinearLayout.LayoutParams(dp(46), dp(46)))
-        bottom.addView(row)
-        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(7), dp(4), 0) }
-        reasoningButton = text("Razonamiento  ▾", 13f, muted).apply {
-            setPadding(dp(12), dp(9), dp(12), dp(9)); background = shape(panel, 12)
-            contentDescription = "Configurar razonamiento"; setOnClickListener { showReasoningMenu() }
+        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; background = shape(Color.WHITE, 22); setPadding(dp(12), dp(8), dp(8), dp(8)); elevation = dp(1).toFloat() }
+        composer = EditText(this).apply {
+            hint = "Escribe tu mensaje…"; textSize = 16f; setTextColor(ink); setHintTextColor(muted); background = null
+            minLines = 1; maxLines = 5; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setPadding(dp(8), dp(10), dp(8), dp(10))
         }
-        controls.addView(reasoningButton)
-        bottom.addView(controls)
-        bottom.addView(text("Las conversaciones se guardan en este dispositivo.", 11f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(9), 0, 0) })
+        card.addView(composer, LinearLayout.LayoutParams(-1, -2))
+        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        reasoningButton = text("Razonamiento  ▾", 13f, muted).apply {
+            setPadding(dp(10), dp(9), dp(10), dp(9)); background = shape(panel, 12); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            contentDescription = "Configurar razonamiento"; setOnClickListener { showReasoningMenu() }; visibility = View.GONE
+        }
+        val reasoningSpace = FrameLayout(this)
+        reasoningSpace.addView(reasoningButton, FrameLayout.LayoutParams(-2, -2, Gravity.START or Gravity.CENTER_VERTICAL))
+        controls.addView(reasoningSpace, LinearLayout.LayoutParams(0, -2, 1f))
+        send = button("↑").apply { contentDescription = "Enviar mensaje"; textSize = 22f; setTextColor(Color.WHITE); background = shape(accent, 13); minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0; setPadding(0, 0, 0, 0); setOnClickListener { sendMessage() } }
+        controls.addView(send, LinearLayout.LayoutParams(dp(44), dp(44)))
+        card.addView(controls, LinearLayout.LayoutParams(-1, -2))
+        bottom.addView(card)
         root.addView(bottom)
         showWelcome()
     }
     private fun showWelcome() {
-        transcript.removeAllViews()
-        transcript.addView(text("¿En qué puedo ayudarte?", 27f).apply { gravity = Gravity.CENTER; setPadding(0, dp(70), 0, 0); typeface = Typeface.create("serif", Typeface.NORMAL) })
-        transcript.addView(text("Escribe lo que tengas en mente.", 14f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(20), dp(10), dp(20), 0) })
+        transcript.removeAllViews(); transcript.gravity = Gravity.CENTER
+        transcript.addView(text("¿En qué puedo ayudarte?", 27f).apply { gravity = Gravity.CENTER; typeface = Typeface.create("serif", Typeface.NORMAL) })
+        transcript.addView(text("Escribe lo que tengas en mente.", 14f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(12), dp(10), dp(12), 0) })
+    }
+    private fun isNearBottom(): Boolean {
+        if (!::scroller.isInitialized || scroller.childCount == 0) return true
+        return scroller.getChildAt(0).bottom - (scroller.height + scroller.scrollY) <= dp(96)
     }
     private fun addMessage(role: String, content: String): TextView {
+        transcript.gravity = Gravity.TOP
         val isUser = role == "user"
         val isError = role == "error"
         val row = LinearLayout(this).apply { gravity = if (isUser) Gravity.END else Gravity.START; setPadding(0, dp(4), 0, dp(16)) }
@@ -367,7 +384,10 @@ class MainActivity : Activity() {
         title.text = provider.name; refreshModelButton(); refreshReasoningProfile()
     }
     private fun refreshModelButton() {
-        if (::modelButton.isInitialized) modelButton.text = (prefs.getString("model_name", null) ?: prefs.getString("model", "Elegir modelo")?.takeIf { it.isNotBlank() }?.let { ModelDiscovery.friendlyName(it) } ?: "Elegir modelo") + "  ▾"
+        if (::modelButton.isInitialized) {
+            val display = prefs.getString("model_name", null) ?: prefs.getString("model", "Elegir modelo")?.takeIf { it.isNotBlank() }?.let { ModelDiscovery.friendlyName(it) } ?: "Elegir modelo"
+            modelButton.text = "$display  ▾"; modelButton.contentDescription = "Seleccionar modelo. Actual: $display"
+        }
     }
     private fun showModelPicker() {
         val choices = providers.flatMap { p -> p.selected.map { p to it } }
@@ -390,6 +410,7 @@ class MainActivity : Activity() {
     }
     private fun updateReasoningButton() {
         if (!::reasoningButton.isInitialized) return
+        reasoningButton.visibility = if (reasoningLoading || reasoningProfile != null) View.VISIBLE else View.GONE
         val (mode, value) = currentEffort()
         val label = when {
             reasoningLoading -> "Consultando…"
@@ -646,7 +667,7 @@ class MainActivity : Activity() {
         if (reasoningLoading) { Toast.makeText(this, "Espera a que se consulten las capacidades del modelo.", Toast.LENGTH_SHORT).show(); return }
         if (prefs.getString("active_provider_id", null) == null || prefs.getString("model", "").isNullOrBlank()) { showModelPicker(); return }
         val type = prefs.getInt("type", 0); val endpoint = prefs.getString("url", "")!!; val key = prefs.getString("key", "")!!; val model = prefs.getString("model", "")!!
-        messages.add("user" to content); if (messages.size == 1) transcript.removeAllViews(); addMessage("user", content); composer.setText("")
+        messages.add("user" to content); if (messages.size == 1) transcript.removeAllViews(); val userView = addMessage("user", content); composer.setText("")
         val streamView = addMessage("assistant", "").apply { text = "Generando respuesta…"; setTextColor(muted) }
         busy = true; send.isEnabled = false; send.text = "…"
         val snapshot = messages.toList(); val requestGeneration = ++generation
@@ -660,7 +681,7 @@ class MainActivity : Activity() {
                     val now = android.os.SystemClock.uptimeMillis()
                     if (now - lastUpdate >= 75) {
                         lastUpdate = now
-                        runOnUiThread { if (!isDestroyed && !isFinishing && requestGeneration == generation && busy) { streamView.setTextColor(ink); streamView.text = current; scroller.post { scroller.fullScroll(View.FOCUS_DOWN) } } }
+                        runOnUiThread { if (!isDestroyed && !isFinishing && requestGeneration == generation && busy) { val follow = isNearBottom(); streamView.setTextColor(ink); streamView.text = current; if (follow) scroller.post { scroller.fullScroll(View.FOCUS_DOWN) } } }
                     }
                 })
             } catch (e: Exception) { Result.failure(e) }
@@ -668,14 +689,17 @@ class MainActivity : Activity() {
                 if (isFinishing || isDestroyed || requestGeneration != generation) return@runOnUiThread
                 busy = false; send.isEnabled = true; send.text = "↑"
                 result.fold(onSuccess = { answer ->
+                    val follow = isNearBottom()
                     streamView.setTextColor(ink); markdown.setMarkdown(streamView, answer.text)
                     messages.add("assistant" to answer.text); saveCurrentChat()
                     answer.reasoningTokens?.let { count -> transcript.addView(text("Razonamiento: $count tokens", 11f, muted).apply { setPadding(dp(4), 0, 0, dp(12)) }) }
-                    scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
+                    if (follow) scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
                 }, onFailure = { error ->
                     if (messages.lastOrNull()?.first == "user") messages.removeAt(messages.lastIndex)
                     val streamRow = (streamView.parent as? View)?.parent as? View
                     if (streamRow != null) transcript.removeView(streamRow)
+                    val userRow = (userView.parent as? View)?.parent as? View
+                    if (userRow != null) transcript.removeView(userRow)
                     composer.setText(content)
                     addMessage("error", "La respuesta se interrumpió. ${error.message ?: "Error de conexión."}")
                 })

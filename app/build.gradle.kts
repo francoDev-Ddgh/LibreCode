@@ -9,8 +9,8 @@ android {
         applicationId = "com.librecode.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.4"
+        versionCode = 5
+        versionName = "1.5"
         resourceConfigurations += listOf("en", "es")
     }
     signingConfigs {
