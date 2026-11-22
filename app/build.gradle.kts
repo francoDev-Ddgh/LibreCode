@@ -9,8 +9,8 @@ android {
         applicationId = "com.librecode.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.2"
+        versionCode = 3
+        versionName = "1.3"
         resourceConfigurations += listOf("en", "es")
     }
     signingConfigs {
@@ -40,4 +40,5 @@ android {
 dependencies {
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")
+    testImplementation("junit:junit:4.13.2")
 }

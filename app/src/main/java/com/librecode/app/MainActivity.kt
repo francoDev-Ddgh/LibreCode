@@ -50,6 +50,11 @@ class MainActivity : Activity() {
     private lateinit var send: Button
     private lateinit var title: TextView
     private lateinit var modelButton: TextView
+    private lateinit var reasoningButton: TextView
+    private var reasoningProfile: EffortProfile? = null
+    private var reasoningLoading = false
+    private var reasoningVersion = 0
+    private data class Reply(val text: String, val reasoningTokens: Int?)
     private val scanHandler = Handler(Looper.getMainLooper())
     private var scanVersion = 0
     private val executor = Executors.newSingleThreadExecutor()
@@ -104,6 +109,7 @@ class MainActivity : Activity() {
         loadHistory()
         loadProviders()
         buildScreen()
+        refreshReasoningProfile()
         val restoredId = savedInstanceState?.getString("chatId")
         chats.find { it.id == restoredId }?.let { openChat(it) }
         if (prefs.getString("active_provider_id", null) == null) showSettings("providers")
@@ -143,6 +149,13 @@ class MainActivity : Activity() {
         send = button("↑").apply { contentDescription = "Enviar mensaje"; textSize = 22f; setTextColor(Color.WHITE); background = shape(accent, 13); setOnClickListener { sendMessage() } }
         row.addView(send, LinearLayout.LayoutParams(dp(46), dp(46)))
         bottom.addView(row)
+        val controls = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(7), dp(4), 0) }
+        reasoningButton = text("Razonamiento  ▾", 13f, muted).apply {
+            setPadding(dp(12), dp(9), dp(12), dp(9)); background = shape(panel, 12)
+            contentDescription = "Configurar razonamiento"; setOnClickListener { showReasoningMenu() }
+        }
+        controls.addView(reasoningButton)
+        bottom.addView(controls)
         bottom.addView(text("Las conversaciones se guardan en este dispositivo.", 11f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(9), 0, 0) })
         root.addView(bottom)
         showWelcome()
@@ -348,7 +361,7 @@ class MainActivity : Activity() {
         }
         prefs.edit().putString("active_provider_id", provider.id).putInt("type", provider.type).putString("name", provider.name)
             .putString("url", endpoint).putString("model", model.id).putString("model_name", model.name).putString("key", provider.key).apply()
-        title.text = provider.name; refreshModelButton()
+        title.text = provider.name; refreshModelButton(); refreshReasoningProfile()
     }
     private fun refreshModelButton() {
         if (::modelButton.isInitialized) modelButton.text = (prefs.getString("model_name", null) ?: prefs.getString("model", "Elegir modelo")?.takeIf { it.isNotBlank() }?.let { ModelDiscovery.friendlyName(it) } ?: "Elegir modelo") + "  ▾"
@@ -359,6 +372,82 @@ class MainActivity : Activity() {
         val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(14)) }
         val dialog = AlertDialog.Builder(this).setTitle("Selecciona un modelo").setView(ScrollView(this).apply { addView(container) }).setNegativeButton("Cerrar", null).create()
         choices.forEach { (provider, model) -> settingsRow(container, model.name, provider.name) { activateProvider(provider, model); dialog.dismiss() } }
+        dialog.show()
+    }
+    private fun effortKey(): String {
+        val source = (prefs.getString("active_provider_id", "") ?: "") + "\u0000" + (prefs.getString("model", "") ?: "")
+        return UUID.nameUUIDFromBytes(source.toByteArray(Charsets.UTF_8)).toString()
+    }
+    private fun currentEffort(): Pair<String, String> {
+        val id = effortKey()
+        return (prefs.getString("effort_mode_$id", "") ?: "") to (prefs.getString("effort_value_$id", "auto") ?: "auto")
+    }
+    private fun saveEffort(mode: String, value: String) {
+        val id = effortKey(); prefs.edit().putString("effort_mode_$id", mode).putString("effort_value_$id", value).apply(); updateReasoningButton()
+    }
+    private fun updateReasoningButton() {
+        if (!::reasoningButton.isInitialized) return
+        val (mode, value) = currentEffort()
+        val label = when {
+            reasoningLoading -> "Consultando…"
+            value == "auto" -> "Automático"
+            mode == "custom" -> "Personalizado: $value"
+            reasoningProfile?.mode == mode -> reasoningProfile?.options?.find { it.key == value }?.label ?: if (mode == "gemini_budget" && value.toIntOrNull() != null) "Personalizado: $value tokens" else "Automático"
+            else -> "Automático"
+        }
+        reasoningButton.text = "Razonamiento · $label  ▾"
+    }
+    private fun refreshReasoningProfile() {
+        val version = ++reasoningVersion
+        reasoningProfile = null; reasoningLoading = false
+        val type = prefs.getInt("type", 0); val model = prefs.getString("model", "").orEmpty(); val endpoint = prefs.getString("url", "").orEmpty(); val key = prefs.getString("key", "").orEmpty()
+        if (prefs.getString("active_provider_id", null) == null || model.isBlank()) { updateReasoningButton(); return }
+        if (type != 6) { reasoningProfile = Reasoning.known(type, endpoint, model); updateReasoningButton(); return }
+        reasoningLoading = true; updateReasoningButton()
+        executor.execute {
+            val profile = try { Reasoning.ollama(endpoint, model, key) } catch (_: Exception) { null }
+            runOnUiThread {
+                if (isDestroyed || reasoningVersion != version) return@runOnUiThread
+                reasoningProfile = profile; reasoningLoading = false; updateReasoningButton()
+            }
+        }
+    }
+    private fun showReasoningMenu() {
+        if (busy) { Toast.makeText(this, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show(); return }
+        if (prefs.getString("active_provider_id", null) == null) { showModelPicker(); return }
+        if (reasoningLoading) { Toast.makeText(this, "Consultando capacidades del modelo…", Toast.LENGTH_SHORT).show(); return }
+        val profile = reasoningProfile
+        val options = profile?.options ?: listOf(EffortOption("auto", "Automático · predeterminado"))
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(16)) }
+        val message = profile?.note ?: "Este proveedor no informa controles verificables para este modelo. Automático no modifica la solicitud."
+        content.addView(text(message, 13f, muted).apply { setPadding(dp(4), 0, dp(4), dp(12)) })
+        val dialog = AlertDialog.Builder(this).setTitle("Razonamiento").setView(ScrollView(this).apply { addView(content) }).setNegativeButton("Cerrar", null).create()
+        val (savedMode, savedValue) = currentEffort()
+        options.forEach { option ->
+            val selected = if (option.key == "auto") savedValue == "auto" || savedMode != "custom" && savedMode != profile?.mode else savedMode == profile?.mode && savedValue == option.key
+            settingsRow(content, option.label + if (selected) "  ✓" else "", if (option.key == "auto") "Sin parámetros adicionales" else "Para este modelo") {
+                saveEffort(profile?.mode ?: "", option.key); dialog.dismiss()
+            }
+        }
+        settingsRow(content, "Personalizado…", "Valor de API manual; compatibilidad no verificada") { dialog.dismiss(); showCustomEffort(profile) }
+        dialog.show()
+    }
+    private fun showCustomEffort(profile: EffortProfile?) {
+        val type = prefs.getInt("type", 0)
+        val isBudget = profile?.mode == "gemini_budget"
+        val edit = EditText(this).apply {
+            setSingleLine(true); hint = if (isBudget) "Tokens: 0 a 24576" else when (type) { 0 -> "Nivel o presupuesto (ej. high o 1024)"; 1 -> "Esfuerzo o off (ej. high)"; 6 -> "true, false o nivel de Ollama"; else -> "Valor de esfuerzo (ej. high)" }
+            setPadding(dp(20), dp(12), dp(20), dp(12)); if (isBudget) inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        val dialog = AlertDialog.Builder(this).setTitle("Razonamiento personalizado")
+            .setMessage("Se enviará el valor tal cual. Si el modelo o servidor no lo admite, la petición puede fallar.")
+            .setView(edit).setNegativeButton("Cancelar", null).setPositiveButton("Guardar", null).create()
+        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val value = edit.text.toString().trim()
+            val valid = if (isBudget) value.toIntOrNull()?.let { it in 0..24576 && (it == 0 || it >= 512) } == true else value.matches(Regex("[A-Za-z0-9_.-]{1,32}"))
+            if (!valid) Toast.makeText(this, if (isBudget) "Usa 0 o un valor entre 512 y 24576." else "Introduce un valor de API válido.", Toast.LENGTH_LONG).show()
+            else { saveEffort(if (isBudget) "gemini_budget" else "custom", value); dialog.dismiss() }
+        } }
         dialog.show()
     }
     private fun closeSettings() {
@@ -544,7 +633,7 @@ class MainActivity : Activity() {
                 if (active == p.id || active == null) {
                     val selected = p.selected.find { it.id == prefs.getString("model", "") } ?: p.selected.firstOrNull()
                     if (selected != null) activateProvider(p, selected)
-                    else if (active == p.id) { prefs.edit().remove("active_provider_id").remove("model_name").remove("model").remove("key").apply(); title.text = "Sin modelo"; refreshModelButton() }
+                    else if (active == p.id) { prefs.edit().remove("active_provider_id").remove("model_name").remove("model").remove("key").apply(); title.text = "Sin modelo"; refreshModelButton(); refreshReasoningProfile() }
                 }
                 closeSettings()
             }
@@ -554,7 +643,7 @@ class MainActivity : Activity() {
             setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle("Eliminar proveedor").setMessage("Se borrarán su configuración y su clave de este dispositivo.")
                 .setPositiveButton("Eliminar") { _, _ ->
                     providers.removeAll { it.id == existing.id }; saveProviders()
-                    if (prefs.getString("active_provider_id", null) == existing.id) { prefs.edit().remove("active_provider_id").remove("key").remove("url").remove("model").remove("model_name").remove("name").apply(); title.text = "Sin modelo"; refreshModelButton() }
+                    if (prefs.getString("active_provider_id", null) == existing.id) { prefs.edit().remove("active_provider_id").remove("key").remove("url").remove("model").remove("model_name").remove("name").apply(); title.text = "Sin modelo"; refreshModelButton(); refreshReasoningProfile() }
                     showSettings("providers")
                 }.setNegativeButton("Cancelar", null).show() }
         }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
@@ -563,17 +652,22 @@ class MainActivity : Activity() {
     private fun sendMessage() {
         val content = composer.text.toString().trim()
         if (content.isEmpty() || busy) return
+        if (reasoningLoading) { Toast.makeText(this, "Espera a que se consulten las capacidades del modelo.", Toast.LENGTH_SHORT).show(); return }
         if (prefs.getString("active_provider_id", null) == null || prefs.getString("model", "").isNullOrBlank()) { showModelPicker(); return }
         val type = prefs.getInt("type", 0); val endpoint = prefs.getString("url", "")!!; val key = prefs.getString("key", "")!!; val model = prefs.getString("model", "")!!
         messages.add("user" to content); if (messages.size == 1) transcript.removeAllViews(); addMessage("user", content); composer.setText("")
         busy = true; send.isEnabled = false; send.text = "…"
         val snapshot = messages.toList(); val requestGeneration = ++generation
+        val savedEffort = currentEffort(); val profile = reasoningProfile
+        val effort = if (savedEffort.second == "auto" || savedEffort.first == "custom" || (profile != null && savedEffort.first == profile.mode && (profile.options.any { it.key == savedEffort.second } || profile.mode == "gemini_budget" && savedEffort.second.toIntOrNull()?.let { it in 0..24576 } == true))) savedEffort else "" to "auto"
         executor.execute {
-            val result = try { Result.success(request(type, endpoint, key, model, snapshot)) } catch (e: Exception) { Result.failure(e) }
+            val result = try { Result.success(request(type, endpoint, key, model, snapshot, effort)) } catch (e: Exception) { Result.failure(e) }
             runOnUiThread {
                 if (isFinishing || isDestroyed || requestGeneration != generation) return@runOnUiThread
                 busy = false; send.isEnabled = true; send.text = "Enviar"
-                result.fold(onSuccess = { answer -> messages.add("assistant" to answer); addMessage("assistant", answer); saveCurrentChat() }, onFailure = { error ->
+                result.fold(onSuccess = { answer -> messages.add("assistant" to answer.text); addMessage("assistant", answer.text); saveCurrentChat()
+                    answer.reasoningTokens?.let { count -> transcript.addView(text("Razonamiento: $count tokens", 11f, muted).apply { setPadding(dp(4), 0, 0, dp(12)) }) }
+                }, onFailure = { error ->
                     if (messages.lastOrNull()?.first == "user") messages.removeAt(messages.lastIndex)
                     composer.setText(content)
                     addMessage("error", "No se pudo obtener una respuesta. ${error.message ?: "Error de conexión."}")
@@ -581,7 +675,7 @@ class MainActivity : Activity() {
             }
         }
     }
-    private fun request(type: Int, endpoint: String, key: String, model: String, history: List<Pair<String, String>>): String {
+    private fun request(type: Int, endpoint: String, key: String, model: String, history: List<Pair<String, String>>, effort: Pair<String, String>): Reply {
         val body = JSONObject()
         when (type) {
             0 -> { val contents = JSONArray(); history.forEach { (role, value) -> contents.put(JSONObject().put("role", if (role == "assistant") "model" else "user").put("parts", JSONArray().put(JSONObject().put("text", value)))) }; body.put("contents", contents) }
@@ -591,6 +685,7 @@ class MainActivity : Activity() {
             4 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("input", list).put("store", false) }
             else -> error("Proveedor desconocido")
         }
+        Reasoning.apply(body, type, effort.first, effort.second)
         require(ModelDiscovery.isAllowedEndpoint(endpoint, type)) { "URL no permitida. Usa HTTPS o una dirección local HTTP para Ollama." }
         val connection = URL(endpoint).openConnection() as HttpURLConnection
         try {
@@ -621,15 +716,22 @@ class MainActivity : Activity() {
             val response = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             val json = JSONObject(response)
             val answer = when (type) {
-                0 -> { val parts = json.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts"); (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.optString("text")?.takeIf(String::isNotBlank) }.joinToString("\n") }
+                0 -> { val parts = json.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts"); (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.takeUnless { part -> part.optBoolean("thought") }?.optString("text")?.takeIf(String::isNotBlank) }.joinToString("\n") }
                 1 -> { val blocks = json.getJSONArray("content"); (0 until blocks.length()).mapNotNull { blocks.optJSONObject(it)?.takeIf { b -> b.optString("type") == "text" }?.optString("text") }.joinToString("\n") }
                 6 -> json.getJSONObject("message").optString("content")
                 2, 3, 5 -> json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
                 else -> { val out = json.getJSONArray("output"); val pieces = mutableListOf<String>(); for (i in 0 until out.length()) { val block = out.optJSONObject(i) ?: continue; val parts = block.optJSONArray("content") ?: continue; for (j in 0 until parts.length()) { val part = parts.optJSONObject(j) ?: continue; if (part.optString("type") == "output_text") pieces.add(part.optString("text")) } }; pieces.joinToString("\n") }
             }
             if (answer.isBlank()) throw IllegalStateException("El proveedor no devolvió texto.")
-            return answer
+            val count = when (type) {
+                0 -> json.optJSONObject("usageMetadata")?.takeIf { it.has("thoughtsTokenCount") }?.optInt("thoughtsTokenCount")
+                1 -> json.optJSONObject("usage")?.optJSONObject("output_tokens_details")?.takeIf { it.has("thinking_tokens") }?.optInt("thinking_tokens")
+                2, 3, 5 -> json.optJSONObject("usage")?.optJSONObject("completion_tokens_details")?.takeIf { it.has("reasoning_tokens") }?.optInt("reasoning_tokens")
+                4 -> json.optJSONObject("usage")?.optJSONObject("output_tokens_details")?.takeIf { it.has("reasoning_tokens") }?.optInt("reasoning_tokens")
+                else -> null
+            }
+            return Reply(answer, count)
         } finally { connection.disconnect() }
     }
-    override fun onDestroy() { generation++; scanVersion++; scanHandler.removeCallbacksAndMessages(null); executor.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { generation++; scanVersion++; reasoningVersion++; scanHandler.removeCallbacksAndMessages(null); executor.shutdownNow(); super.onDestroy() }
 }
