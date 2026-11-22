@@ -395,12 +395,65 @@ class MainActivity : Activity() {
         }
     }
     private fun showModelPicker() {
-        val choices = providers.flatMap { p -> p.selected.map { p to it } }
-        if (choices.isEmpty()) { showSettings("providers"); return }
-        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(14)) }
-        val dialog = AlertDialog.Builder(this).setTitle("Selecciona un modelo").setView(ScrollView(this).apply { addView(container) }).setNegativeButton("Cerrar", null).create()
-        choices.forEach { (provider, model) -> settingsRow(container, model.name, provider.name) { activateProvider(provider, model); dialog.dismiss() } }
-        dialog.show()
+        val groups = providers.filter { it.selected.isNotEmpty() }
+        val activeProvider = prefs.getString("active_provider_id", null)
+        val activeModel = prefs.getString("model", null)
+        val dialog = android.app.Dialog(this)
+        val surface = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val radius = dp(24).toFloat()
+            background = GradientDrawable().apply {
+                setColor(bg)
+                cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f)
+            }
+            setPadding(dp(20), dp(10), dp(20), dp(16))
+        }
+        val handle = View(this).apply { background = shape(Color.rgb(207, 204, 196), 4) }
+        surface.addView(handle, LinearLayout.LayoutParams(dp(34), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(16) })
+        val heading = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val headingText = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        headingText.addView(text("Elegir modelo", 24f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
+        headingText.addView(text("Elige cómo quieres continuar", 13f, muted).apply { setPadding(0, dp(4), 0, 0) })
+        heading.addView(headingText, LinearLayout.LayoutParams(0, -2, 1f))
+        heading.addView(text("×", 26f, muted).apply {
+            gravity = Gravity.CENTER; background = shape(Color.WHITE, 12); contentDescription = "Cerrar selector de modelos"
+            setOnClickListener { dialog.dismiss() }
+        }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        surface.addView(heading, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(16) })
+        val scroll = ScrollView(this).apply { isFillViewport = false; isVerticalScrollBarEnabled = true }
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        if (groups.isEmpty()) list.addView(text("Todavía no has agregado ningún modelo.", 15f, muted).apply { setPadding(dp(4), dp(12), dp(4), dp(18)) })
+        groups.forEach { provider ->
+            list.addView(text(provider.name.uppercase(), 11f, muted).apply {
+                typeface = Typeface.DEFAULT_BOLD; setPadding(dp(4), dp(12), dp(4), dp(8)); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            })
+            provider.selected.forEach { model ->
+                val selected = provider.id == activeProvider && model.id == activeModel
+                val row = LinearLayout(this).apply {
+                    gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12)); minimumHeight = dp(56)
+                    background = shape(if (selected) Color.rgb(239, 228, 219) else Color.WHITE, 14)
+                    contentDescription = model.name + if (selected) ", seleccionado" else ""
+                    setOnClickListener { activateProvider(provider, model); dialog.dismiss() }
+                }
+                row.addView(text(model.name, 15f, ink).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; if (selected) typeface = Typeface.DEFAULT_BOLD }, LinearLayout.LayoutParams(0, -2, 1f))
+                if (selected) row.addView(text("✓", 19f, accent).apply { setPadding(dp(12), 0, 0, 0) })
+                list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(7) })
+            }
+        }
+        scroll.addView(list)
+        val choiceCount = groups.sumOf { it.selected.size }
+        val listHeight = minOf((resources.displayMetrics.heightPixels * 0.46f).toInt(), dp(if (choiceCount == 0) 58 else choiceCount * 66 + groups.size * 36))
+        surface.addView(scroll, LinearLayout.LayoutParams(-1, listHeight))
+        val manage = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL; setPadding(dp(14), dp(12), dp(14), dp(12)); background = shape(panel, 14)
+            setOnClickListener { dialog.dismiss(); showSettings("providers") }
+        }
+        manage.addView(text("Administrar modelos", 15f, ink).apply { typeface = Typeface.DEFAULT_BOLD }, LinearLayout.LayoutParams(0, -2, 1f))
+        manage.addView(text("→", 20f, muted))
+        surface.addView(manage, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        dialog.setContentView(surface)
+        dialog.window?.apply { setBackgroundDrawableResource(android.R.color.transparent); setGravity(Gravity.BOTTOM); addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND); setDimAmount(0.45f); navigationBarColor = bg }
+        dialog.show(); dialog.window?.setLayout(-1, -2)
     }
     private fun effortKey(): String {
         val source = (prefs.getString("active_provider_id", "") ?: "") + "\u0000" + (prefs.getString("model", "") ?: "")
