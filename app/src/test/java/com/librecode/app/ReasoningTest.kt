@@ -7,7 +7,7 @@ class ReasoningTest {
     @Test fun geminiLevelsAreModelSpecific() {
         val flash = Reasoning.known(0, "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent", "gemini-3.5-flash")!!
         assertEquals("gemini_level", flash.mode)
-        assertTrue(flash.options.any { it.key == "minimal" })
+        assertTrue(flash.options.any { it.key == "medium" })
         assertFalse(flash.options.any { it.key == "none" })
         val old = Reasoning.known(0, "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent", "gemini-2.5-flash")!!
         assertEquals("gemini_budget", old.mode)

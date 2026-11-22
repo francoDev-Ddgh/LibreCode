@@ -57,6 +57,7 @@ object ModelDiscovery {
         }
         return URL(source.protocol, source.host, source.port, modelsPath).toString()
     }
+    private fun sourceIsZai(endpoint: String) = try { URL(endpoint).host.equals("api.z.ai", true) } catch (_: Exception) { false }
     fun fetch(endpoint: String, type: Int, key: String): List<ModelInfo> {
         require(isAllowedEndpoint(endpoint, type)) { "URL no permitida. Usa HTTPS o una dirección local HTTP para Ollama." }
         val base = modelsUrl(endpoint, type)
@@ -74,7 +75,10 @@ object ModelDiscovery {
                     else -> if (key.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer $key")
                 }
                 val status = conn.responseCode
-                if (status !in 200..299) throw IllegalStateException("HTTP $status al consultar modelos. Revisa URL, clave y permisos.")
+                if (status !in 200..299) {
+                    if (sourceIsZai(endpoint) && status in setOf(404, 405)) return listOf(ModelInfo("glm-5.3", "GLM 5.3", "Catálogo documentado; disponibilidad según tu plan"), ModelInfo("glm-5.2", "GLM 5.2", "Catálogo documentado; disponibilidad según tu plan"), ModelInfo("glm-4.7", "GLM 4.7", "Catálogo documentado; disponibilidad según tu plan"))
+                    throw IllegalStateException("HTTP $status al consultar modelos. Revisa URL, clave y permisos.")
+                }
                 val content = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
                 val json = JSONObject(content)
                 val list = json.optJSONArray(if (type == 0 || type == 6) "models" else "data") ?: throw IllegalStateException("El servidor no devolvió una lista de modelos compatible.")

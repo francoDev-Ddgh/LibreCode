@@ -74,14 +74,15 @@ class MainActivity : Activity() {
         }).build()
     }
     private val prefs by lazy { getSharedPreferences("provider", MODE_PRIVATE) }
-    private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI · Responses", "OpenAI · Chat Completions", "Ollama")
+    private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI · Responses", "OpenAI · Chat Completions", "Ollama", "Z.ai", "Google Gemma")
     private val urls = arrayOf(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
         "https://api.anthropic.com/v1/messages", "https://api.deepseek.com/chat/completions",
         "https://api.moonshot.ai/v1/chat/completions", "https://api.openai.com/v1/responses",
-        "https://api.openai.com/v1/chat/completions", "http://192.168.1.100:11434/api/chat"
+        "https://api.openai.com/v1/chat/completions", "http://192.168.1.100:11434/api/chat",
+        "https://api.z.ai/api/paas/v4/chat/completions", "https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent"
     )
-    private val models = arrayOf("gemini-3.5-flash", "claude-opus-5-5", "deepseek-flash", "kimi-k3", "gpt-6.2-astra", "gpt-6.2-astra", "")
+    private val models = arrayOf("gemini-3.5-flash", "claude-opus-5-5", "deepseek-flash", "kimi-k3", "gpt-6.2-astra", "gpt-6.2-astra", "", "glm-5.3", "gemma-4-26b-a4b-it")
     private var busy = false
     private var generation = 0
 
@@ -165,7 +166,7 @@ class MainActivity : Activity() {
         transcript.addView(text("¿En qué puedo ayudarte?", 27f).apply { gravity = Gravity.CENTER; setPadding(0, dp(70), 0, 0); typeface = Typeface.create("serif", Typeface.NORMAL) })
         transcript.addView(text("Escribe lo que tengas en mente.", 14f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(20), dp(10), dp(20), 0) })
     }
-    private fun addMessage(role: String, content: String) {
+    private fun addMessage(role: String, content: String): TextView {
         val isUser = role == "user"
         val isError = role == "error"
         val row = LinearLayout(this).apply { gravity = if (isUser) Gravity.END else Gravity.START; setPadding(0, dp(4), 0, dp(16)) }
@@ -182,6 +183,7 @@ class MainActivity : Activity() {
         row.addView(block, LinearLayout.LayoutParams(width, -2))
         transcript.addView(row, LinearLayout.LayoutParams(-1, -2))
         scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
+        return body
     }
     private fun renderConversation() {
         transcript.removeAllViews()
@@ -311,6 +313,7 @@ class MainActivity : Activity() {
         saveHistory()
     }
     override fun onSaveInstanceState(outState: Bundle) { outState.putString("chatId", chatId); super.onSaveInstanceState(outState) }
+    private fun presetType(index: Int) = when (index) { 7 -> 5; 8 -> 0; else -> index }
     private fun legacyModel(type: Int, url: String, model: String): String = if (type == 0) try { URL(url).path.substringAfterLast("/models/").substringBefore(":") } catch (_: Exception) { "" } else model
     private fun loadProviders() {
         val stored = prefs.getString("providers_v1", null)
@@ -324,7 +327,7 @@ class MainActivity : Activity() {
                     else if (key.isNotBlank()) { val id = legacyModel(type, url, model); if (id.isNotBlank()) selected.add(ModelInfo(id, ModelDiscovery.friendlyName(id))) }
                     providers.add(Provider(p.getString("id"), type, p.getString("name"), url, model, key, p.getBoolean("custom"), selected))
                 }
-                for (type in names.indices) if (providers.none { it.id == "preset_$type" }) providers.add(Provider("preset_$type", type, names[type], urls[type], models[type], "", false))
+                for (type in names.indices) if (providers.none { it.id == "preset_$type" }) providers.add(Provider("preset_$type", presetType(type), names[type], urls[type], models[type], "", false))
                 saveProviders()
             } catch (_: Exception) {
                 providers.clear(); providersAvailable = false
@@ -332,7 +335,7 @@ class MainActivity : Activity() {
             }
             return
         }
-        for (type in names.indices) providers.add(Provider("preset_$type", type, names[type], urls[type], models[type], "", false))
+        for (type in names.indices) providers.add(Provider("preset_$type", presetType(type), names[type], urls[type], models[type], "", false))
         val oldKey = prefs.getString("key", "").orEmpty()
         if (oldKey.isNotBlank()) {
             val type = prefs.getInt("type", 0).coerceIn(0, names.lastIndex)
@@ -391,8 +394,7 @@ class MainActivity : Activity() {
         val label = when {
             reasoningLoading -> "Consultando…"
             value == "auto" -> "Automático"
-            mode == "custom" -> "Personalizado: $value"
-            reasoningProfile?.mode == mode -> reasoningProfile?.options?.find { it.key == value }?.label ?: if (mode == "gemini_budget" && value.toIntOrNull() != null) "Personalizado: $value tokens" else "Automático"
+            reasoningProfile?.mode == mode -> reasoningProfile?.options?.find { it.key == value }?.label ?: "Automático"
             else -> "Automático"
         }
         reasoningButton.text = "Razonamiento · $label  ▾"
@@ -400,6 +402,8 @@ class MainActivity : Activity() {
     private fun refreshReasoningProfile() {
         val version = ++reasoningVersion
         reasoningProfile = null; reasoningLoading = false
+        val activeProvider = providers.find { it.id == prefs.getString("active_provider_id", null) }
+        if (activeProvider == null || activeProvider.custom) { updateReasoningButton(); return }
         val type = prefs.getInt("type", 0); val model = prefs.getString("model", "").orEmpty(); val endpoint = prefs.getString("url", "").orEmpty(); val key = prefs.getString("key", "").orEmpty()
         if (prefs.getString("active_provider_id", null) == null || model.isBlank()) { updateReasoningButton(); return }
         if (type != 6) { reasoningProfile = Reasoning.known(type, endpoint, model); updateReasoningButton(); return }
@@ -416,39 +420,26 @@ class MainActivity : Activity() {
         if (busy) { Toast.makeText(this, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show(); return }
         if (prefs.getString("active_provider_id", null) == null) { showModelPicker(); return }
         if (reasoningLoading) { Toast.makeText(this, "Consultando capacidades del modelo…", Toast.LENGTH_SHORT).show(); return }
+        val active = providers.find { it.id == prefs.getString("active_provider_id", null) }
         val profile = reasoningProfile
-        val options = profile?.options ?: listOf(EffortOption("auto", "Automático · predeterminado"))
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(16)) }
-        val message = profile?.note ?: "Este proveedor no informa controles verificables para este modelo. Automático no modifica la solicitud."
-        content.addView(text(message, 13f, muted).apply { setPadding(dp(4), 0, dp(4), dp(12)) })
-        val dialog = AlertDialog.Builder(this).setTitle("Razonamiento").setView(ScrollView(this).apply { addView(content) }).setNegativeButton("Cerrar", null).create()
+        val options = profile?.options ?: listOf(EffortOption("auto", "Automático"))
+        val dialog = android.app.Dialog(this)
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(18), dp(22), dp(22)); background = shape(bg, 24) }
+        content.addView(text("Razonamiento", 24f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
+        val note = if (active?.custom == true) "Los controles están disponibles solo para proveedores predefinidos." else profile?.note ?: "Este modelo no publica controles compatibles. Se usará su configuración predeterminada."
+        content.addView(text(note, 13f, muted).apply { setPadding(0, dp(8), 0, dp(16)) })
         val (savedMode, savedValue) = currentEffort()
         options.forEach { option ->
-            val selected = if (option.key == "auto") savedValue == "auto" || savedMode != "custom" && savedMode != profile?.mode else savedMode == profile?.mode && savedValue == option.key
-            settingsRow(content, option.label + if (selected) "  ✓" else "", if (option.key == "auto") "Sin parámetros adicionales" else "Para este modelo") {
-                saveEffort(profile?.mode ?: "", option.key); dialog.dismiss()
-            }
+            val selected = if (option.key == "auto") savedValue == "auto" || savedMode != profile?.mode || profile?.options?.none { it.key == savedValue } != false else savedMode == profile?.mode && savedValue == option.key
+            val item = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(14), dp(16), dp(14)); background = shape(if (selected) Color.rgb(237, 228, 220) else Color.WHITE, 14) }
+            item.addView(text(option.label, 16f, ink), LinearLayout.LayoutParams(0, -2, 1f))
+            if (selected) item.addView(text("✓", 19f, accent))
+            item.setOnClickListener { saveEffort(profile?.mode ?: "", option.key); dialog.dismiss() }
+            content.addView(item, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
         }
-        settingsRow(content, "Personalizado…", "Valor de API manual; compatibilidad no verificada") { dialog.dismiss(); showCustomEffort(profile) }
-        dialog.show()
-    }
-    private fun showCustomEffort(profile: EffortProfile?) {
-        val type = prefs.getInt("type", 0)
-        val isBudget = profile?.mode == "gemini_budget"
-        val edit = EditText(this).apply {
-            setSingleLine(true); hint = if (isBudget) "Tokens: 0 a 24576" else when (type) { 0 -> "Nivel o presupuesto (ej. high o 1024)"; 1 -> "Esfuerzo o off (ej. high)"; 6 -> "true, false o nivel de Ollama"; else -> "Valor de esfuerzo (ej. high)" }
-            setPadding(dp(20), dp(12), dp(20), dp(12)); if (isBudget) inputType = InputType.TYPE_CLASS_NUMBER
-        }
-        val dialog = AlertDialog.Builder(this).setTitle("Razonamiento personalizado")
-            .setMessage("Se enviará el valor tal cual. Si el modelo o servidor no lo admite, la petición puede fallar.")
-            .setView(edit).setNegativeButton("Cancelar", null).setPositiveButton("Guardar", null).create()
-        dialog.setOnShowListener { dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-            val value = edit.text.toString().trim()
-            val valid = if (isBudget) value.toIntOrNull()?.let { it in 0..24576 && (it == 0 || it >= 512) } == true else value.matches(Regex("[A-Za-z0-9_.-]{1,32}"))
-            if (!valid) Toast.makeText(this, if (isBudget) "Usa 0 o un valor entre 512 y 24576." else "Introduce un valor de API válido.", Toast.LENGTH_LONG).show()
-            else { saveEffort(if (isBudget) "gemini_budget" else "custom", value); dialog.dismiss() }
-        } }
-        dialog.show()
+        dialog.setContentView(content)
+        dialog.window?.apply { setBackgroundDrawableResource(android.R.color.transparent); setGravity(Gravity.BOTTOM); setLayout(-1, -2); addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND); setDimAmount(0.45f) }
+        dialog.show(); dialog.window?.setLayout(-1, -2)
     }
     private fun closeSettings() {
         scanVersion++; scanHandler.removeCallbacksAndMessages(null)
@@ -596,7 +587,7 @@ class MainActivity : Activity() {
                 val result = try { Result.success(ModelDiscovery.fetch(endpoint, capturedType, secret)) } catch (e: Exception) { Result.failure(e) }
                 runOnUiThread {
                     if (isDestroyed || version != scanVersion || settingsPage != "editor" || !body.isAttachedToWindow) return@runOnUiThread
-                    result.fold(onSuccess = { found -> discovered = found; found.forEach { if (chosen.containsKey(it.id)) chosen[it.id] = it }; drawModels(); status.text = if (found.isEmpty()) "No se encontraron modelos. Puedes agregar un ID manual." else "${found.size} modelos encontrados · toca + para agregar" },
+                    result.fold(onSuccess = { allFound -> val found = if (existing?.id == "preset_8") allFound.filter { it.id.startsWith("gemma-") } else allFound; discovered = found; found.forEach { if (chosen.containsKey(it.id)) chosen[it.id] = it }; drawModels(); status.text = if (found.isEmpty()) "No se encontraron modelos. Puedes agregar un ID manual." else "${found.size} modelos encontrados · toca + para agregar" },
                         onFailure = { discovered = emptyList(); drawModels(); status.text = "No se pudieron consultar los modelos. ${it.message ?: "Error de conexión."} Puedes agregar un ID manual." })
                 }
             }
@@ -656,42 +647,63 @@ class MainActivity : Activity() {
         if (prefs.getString("active_provider_id", null) == null || prefs.getString("model", "").isNullOrBlank()) { showModelPicker(); return }
         val type = prefs.getInt("type", 0); val endpoint = prefs.getString("url", "")!!; val key = prefs.getString("key", "")!!; val model = prefs.getString("model", "")!!
         messages.add("user" to content); if (messages.size == 1) transcript.removeAllViews(); addMessage("user", content); composer.setText("")
+        val streamView = addMessage("assistant", "").apply { text = "Generando respuesta…"; setTextColor(muted) }
         busy = true; send.isEnabled = false; send.text = "…"
         val snapshot = messages.toList(); val requestGeneration = ++generation
         val savedEffort = currentEffort(); val profile = reasoningProfile
-        val effort = if (savedEffort.second == "auto" || savedEffort.first == "custom" || (profile != null && savedEffort.first == profile.mode && (profile.options.any { it.key == savedEffort.second } || profile.mode == "gemini_budget" && savedEffort.second.toIntOrNull()?.let { it in 0..24576 } == true))) savedEffort else "" to "auto"
+        val isPreset = providers.find { it.id == prefs.getString("active_provider_id", null) }?.custom == false
+        val effort = if (isPreset && (savedEffort.second == "auto" || (profile != null && savedEffort.first == profile.mode && profile.options.any { it.key == savedEffort.second }))) savedEffort else "" to "auto"
         executor.execute {
-            val result = try { Result.success(request(type, endpoint, key, model, snapshot, effort)) } catch (e: Exception) { Result.failure(e) }
+            var lastUpdate = 0L
+            val result = try {
+                Result.success(request(type, endpoint, key, model, snapshot, effort) { current ->
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastUpdate >= 75) {
+                        lastUpdate = now
+                        runOnUiThread { if (!isDestroyed && !isFinishing && requestGeneration == generation && busy) { streamView.setTextColor(ink); streamView.text = current; scroller.post { scroller.fullScroll(View.FOCUS_DOWN) } } }
+                    }
+                })
+            } catch (e: Exception) { Result.failure(e) }
             runOnUiThread {
                 if (isFinishing || isDestroyed || requestGeneration != generation) return@runOnUiThread
-                busy = false; send.isEnabled = true; send.text = "Enviar"
-                result.fold(onSuccess = { answer -> messages.add("assistant" to answer.text); addMessage("assistant", answer.text); saveCurrentChat()
+                busy = false; send.isEnabled = true; send.text = "↑"
+                result.fold(onSuccess = { answer ->
+                    streamView.setTextColor(ink); markdown.setMarkdown(streamView, answer.text)
+                    messages.add("assistant" to answer.text); saveCurrentChat()
                     answer.reasoningTokens?.let { count -> transcript.addView(text("Razonamiento: $count tokens", 11f, muted).apply { setPadding(dp(4), 0, 0, dp(12)) }) }
+                    scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
                 }, onFailure = { error ->
                     if (messages.lastOrNull()?.first == "user") messages.removeAt(messages.lastIndex)
+                    val streamRow = (streamView.parent as? View)?.parent as? View
+                    if (streamRow != null) transcript.removeView(streamRow)
                     composer.setText(content)
-                    addMessage("error", "No se pudo obtener una respuesta. ${error.message ?: "Error de conexión."}")
+                    addMessage("error", "La respuesta se interrumpió. ${error.message ?: "Error de conexión."}")
                 })
             }
         }
     }
-    private fun request(type: Int, endpoint: String, key: String, model: String, history: List<Pair<String, String>>, effort: Pair<String, String>): Reply {
+    private fun request(type: Int, endpoint: String, key: String, model: String, history: List<Pair<String, String>>, effort: Pair<String, String>, onUpdate: (String) -> Unit): Reply {
         val body = JSONObject()
         when (type) {
             0 -> { val contents = JSONArray(); history.forEach { (role, value) -> contents.put(JSONObject().put("role", if (role == "assistant") "model" else "user").put("parts", JSONArray().put(JSONObject().put("text", value)))) }; body.put("contents", contents) }
-            1 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("max_tokens", 2048).put("messages", list) }
-            2, 3, 5 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("messages", list).put("stream", false) }
-            6 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("messages", list).put("stream", false) }
-            4 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("input", list).put("store", false) }
+            1 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("max_tokens", 4096).put("messages", list).put("stream", true) }
+            2, 3, 5, 6 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("messages", list).put("stream", true) }
+            4 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("input", list).put("store", false).put("stream", true) }
             else -> error("Proveedor desconocido")
         }
         Reasoning.apply(body, type, effort.first, effort.second)
         require(ModelDiscovery.isAllowedEndpoint(endpoint, type)) { "URL no permitida. Usa HTTPS o una dirección local HTTP para Ollama." }
-        val connection = URL(endpoint).openConnection() as HttpURLConnection
+        val target = if (type == 0) {
+            val url = URL(endpoint); require(url.path.endsWith(":generateContent")) { "La URL de Gemini debe terminar en :generateContent." }
+            val query = url.query?.split('&')?.filter { !it.startsWith("alt=") }?.toMutableList() ?: mutableListOf()
+            query.add("alt=sse")
+            URL(url.protocol, url.host, url.port, url.path.removeSuffix(":generateContent") + ":streamGenerateContent?" + query.joinToString("&")).toString()
+        } else endpoint
+        val connection = URL(target).openConnection() as HttpURLConnection
         try {
-            connection.requestMethod = "POST"; connection.connectTimeout = 30000; connection.readTimeout = 180000; connection.doOutput = true
-            connection.instanceFollowRedirects = false
+            connection.requestMethod = "POST"; connection.connectTimeout = 30000; connection.readTimeout = 180000; connection.doOutput = true; connection.instanceFollowRedirects = false
             connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Accept", if (type == 6) "application/x-ndjson" else "text/event-stream")
             when (type) {
                 0 -> connection.setRequestProperty("x-goog-api-key", key)
                 1 -> { connection.setRequestProperty("x-api-key", key); connection.setRequestProperty("anthropic-version", "2026-10-21") }
@@ -701,36 +713,36 @@ class MainActivity : Activity() {
             val status = connection.responseCode
             if (status !in 200..299) {
                 val raw = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(8192) }.orEmpty()
-                val serverMessage = try {
-                    val parsed = JSONObject(raw)
-                    val error = parsed.opt("error")
-                    when (error) {
-                        is JSONObject -> error.optString("message")
-                        is String -> error
-                        else -> parsed.optString("message")
+                val serverMessage = try { val error = JSONObject(raw).opt("error"); when (error) { is JSONObject -> error.optString("message"); is String -> error; else -> "" } } catch (_: Exception) { "" }
+                val safe = (if (key.isNotBlank()) serverMessage.replace(key, "[clave oculta]") else serverMessage).take(400)
+                throw IllegalStateException("HTTP $status." + if (safe.isNotBlank()) " $safe" else " Revisa URL, modelo y clave.")
+            }
+            val output = StringBuilder(); var complete = false; var tokens: Int? = null
+            fun accept(data: String) {
+                if (data.isBlank()) return
+                val piece = StreamParser.decode(type, data)
+                if (piece.error != null) throw IllegalStateException(if (key.isNotBlank()) piece.error.replace(key, "[clave oculta]").take(400) else piece.error.take(400))
+                if (piece.text.isNotEmpty()) { output.append(piece.text); onUpdate(output.toString()) }
+                if (piece.reasoningTokens != null) tokens = piece.reasoningTokens
+                complete = complete || piece.done
+            }
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                if (type == 6) {
+                    while (true) { val line = reader.readLine() ?: break; if (line.isNotBlank()) accept(line) }
+                } else {
+                    val data = StringBuilder()
+                    fun flush() { if (data.isNotEmpty()) { accept(data.toString()); data.setLength(0) } }
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        if (line.isEmpty()) flush()
+                        else if (line.startsWith("data:")) { if (data.isNotEmpty()) data.append('\n'); data.append(line.substring(5).removePrefix(" ")) }
                     }
-                } catch (_: Exception) { "" }
-                val safeMessage = (if (key.isNotBlank()) serverMessage.replace(key, "[clave oculta]") else serverMessage).take(400)
-                throw IllegalStateException("HTTP $status." + if (safeMessage.isNotBlank()) " $safeMessage" else " Revisa la URL, el protocolo, el modelo y la clave.")
+                    flush()
+                }
             }
-            val response = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            val json = JSONObject(response)
-            val answer = when (type) {
-                0 -> { val parts = json.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts"); (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.takeUnless { part -> part.optBoolean("thought") }?.optString("text")?.takeIf(String::isNotBlank) }.joinToString("\n") }
-                1 -> { val blocks = json.getJSONArray("content"); (0 until blocks.length()).mapNotNull { blocks.optJSONObject(it)?.takeIf { b -> b.optString("type") == "text" }?.optString("text") }.joinToString("\n") }
-                6 -> json.getJSONObject("message").optString("content")
-                2, 3, 5 -> json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
-                else -> { val out = json.getJSONArray("output"); val pieces = mutableListOf<String>(); for (i in 0 until out.length()) { val block = out.optJSONObject(i) ?: continue; val parts = block.optJSONArray("content") ?: continue; for (j in 0 until parts.length()) { val part = parts.optJSONObject(j) ?: continue; if (part.optString("type") == "output_text") pieces.add(part.optString("text")) } }; pieces.joinToString("\n") }
-            }
-            if (answer.isBlank()) throw IllegalStateException("El proveedor no devolvió texto.")
-            val count = when (type) {
-                0 -> json.optJSONObject("usageMetadata")?.takeIf { it.has("thoughtsTokenCount") }?.optInt("thoughtsTokenCount")
-                1 -> json.optJSONObject("usage")?.optJSONObject("output_tokens_details")?.takeIf { it.has("thinking_tokens") }?.optInt("thinking_tokens")
-                2, 3, 5 -> json.optJSONObject("usage")?.optJSONObject("completion_tokens_details")?.takeIf { it.has("reasoning_tokens") }?.optInt("reasoning_tokens")
-                4 -> json.optJSONObject("usage")?.optJSONObject("output_tokens_details")?.takeIf { it.has("reasoning_tokens") }?.optInt("reasoning_tokens")
-                else -> null
-            }
-            return Reply(answer, count)
+            if (!complete) throw IllegalStateException("La conexión se cerró antes de completar el streaming.")
+            if (output.isBlank()) throw IllegalStateException("El proveedor no devolvió texto.")
+            return Reply(output.toString(), tokens)
         } finally { connection.disconnect() }
     }
     override fun onDestroy() { generation++; scanVersion++; reasoningVersion++; scanHandler.removeCallbacksAndMessages(null); executor.shutdownNow(); super.onDestroy() }
