@@ -34,13 +34,14 @@ class MainActivity : Activity() {
     private val executor = Executors.newSingleThreadExecutor()
     private val messages = mutableListOf<Pair<String, String>>()
     private val prefs by lazy { getSharedPreferences("provider", MODE_PRIVATE) }
-    private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI")
+    private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI · Responses", "OpenAI · Chat Completions")
     private val urls = arrayOf(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
         "https://api.anthropic.com/v1/messages", "https://api.deepseek.com/chat/completions",
-        "https://api.moonshot.ai/v1/chat/completions", "https://api.openai.com/v1/responses"
+        "https://api.moonshot.ai/v1/chat/completions", "https://api.openai.com/v1/responses",
+        "https://api.openai.com/v1/chat/completions"
     )
-    private val models = arrayOf("gemini-3.5-flash", "claude-opus-5-5", "deepseek-flash", "kimi-k3", "gpt-6.2-astra")
+    private val models = arrayOf("gemini-3.5-flash", "claude-opus-5-5", "deepseek-flash", "kimi-k3", "gpt-6.2-astra", "gpt-6.2-astra")
     private var busy = false
     private var generation = 0
 
@@ -177,7 +178,7 @@ class MainActivity : Activity() {
         when (type) {
             0 -> { val contents = JSONArray(); history.forEach { (role, value) -> contents.put(JSONObject().put("role", if (role == "assistant") "model" else "user").put("parts", JSONArray().put(JSONObject().put("text", value)))) }; body.put("contents", contents) }
             1 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("max_tokens", 2048).put("messages", list) }
-            2, 3 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("messages", list).put("stream", false) }
+            2, 3, 5 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("messages", list).put("stream", false) }
             4 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("input", list).put("store", false) }
             else -> error("Proveedor desconocido")
         }
@@ -193,13 +194,26 @@ class MainActivity : Activity() {
             }
             connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val status = connection.responseCode
-            if (status !in 200..299) throw IllegalStateException("HTTP $status. Revisa la URL, el modelo, la clave y el saldo.")
+            if (status !in 200..299) {
+                val raw = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText().take(8192) }.orEmpty()
+                val serverMessage = try {
+                    val parsed = JSONObject(raw)
+                    val error = parsed.opt("error")
+                    when (error) {
+                        is JSONObject -> error.optString("message")
+                        is String -> error
+                        else -> parsed.optString("message")
+                    }
+                } catch (_: Exception) { "" }
+                val safeMessage = serverMessage.replace(key, "[clave oculta]").take(400)
+                throw IllegalStateException("HTTP $status." + if (safeMessage.isNotBlank()) " $safeMessage" else " Revisa la URL, el protocolo, el modelo y la clave.")
+            }
             val response = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             val json = JSONObject(response)
             val answer = when (type) {
                 0 -> { val parts = json.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts"); (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.optString("text")?.takeIf(String::isNotBlank) }.joinToString("\n") }
                 1 -> { val blocks = json.getJSONArray("content"); (0 until blocks.length()).mapNotNull { blocks.optJSONObject(it)?.takeIf { b -> b.optString("type") == "text" }?.optString("text") }.joinToString("\n") }
-                2, 3 -> json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
+                2, 3, 5 -> json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
                 else -> { val out = json.getJSONArray("output"); val pieces = mutableListOf<String>(); for (i in 0 until out.length()) { val block = out.optJSONObject(i) ?: continue; val parts = block.optJSONArray("content") ?: continue; for (j in 0 until parts.length()) { val part = parts.optJSONObject(j) ?: continue; if (part.optString("type") == "output_text") pieces.add(part.optString("text")) } }; pieces.joinToString("\n") }
             }
             if (answer.isBlank()) throw IllegalStateException("El proveedor no devolvió texto.")

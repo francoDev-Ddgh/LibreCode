@@ -2,7 +2,7 @@
 
 Chat Android sencillo en Kotlin con proveedores Google Gemini, Anthropic, DeepSeek, Kimi y OpenAI. La conversación existe solo en memoria y desaparece al cerrar la actividad; no hay historial de chats. La configuración del proveedor, URL completa y API key se guarda **en texto plano** en SharedPreferences privadas de la aplicación, solo para pruebas. No subas claves al repositorio; desinstalar la app elimina la configuración. No hay sincronización ni copia de seguridad.
 
-Al abrir la aplicación selecciona el protocolo, nombre, URL HTTPS completa del endpoint y clave. La URL debe corresponder al protocolo seleccionado; Google GenerateContent incluye el modelo en la URL. Los otros modelos se pueden cambiar en el diálogo. El historial de la conversación activa se envía al proveedor en cada petición. No se admiten todavía adjuntos, herramientas ni streaming. URLs personalizadas reciben tu API key: confía únicamente en servidores que controles.
+Al abrir la aplicación selecciona el protocolo, nombre, URL HTTPS completa del endpoint y clave. La URL debe corresponder al protocolo seleccionado; para servicios compatibles con `/chat/completions`, selecciona **OpenAI · Chat Completions**, no OpenAI · Responses; Google GenerateContent incluye el modelo en la URL. Los otros modelos se pueden cambiar en el diálogo. El historial de la conversación activa se envía al proveedor en cada petición. No se admiten todavía adjuntos, herramientas ni streaming. URLs personalizadas reciben tu API key: confía únicamente en servidores que controles.
 
 Android 8+ (API 26); edge-to-edge con márgenes del sistema y teclado. La app usa recursos y vistas nativas, sin dependencias de interfaz externas.
 
