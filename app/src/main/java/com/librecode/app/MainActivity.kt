@@ -9,6 +9,10 @@ import android.os.Build
 import android.os.Bundle
 import android.util.AtomicFile
 import android.text.InputType
+import android.text.TextWatcher
+import android.text.Editable
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
@@ -38,13 +42,16 @@ class MainActivity : Activity() {
     private var settingsPage = ""
     private var editingId: String? = null
     private var providersAvailable = true
-    private data class Provider(val id: String, val type: Int, val name: String, val url: String, val model: String, val key: String, val custom: Boolean)
+    private data class Provider(val id: String, val type: Int, val name: String, val url: String, val model: String, val key: String, val custom: Boolean, val selected: List<ModelInfo> = emptyList())
     private val providers = mutableListOf<Provider>()
     private lateinit var transcript: LinearLayout
     private lateinit var scroller: ScrollView
     private lateinit var composer: EditText
     private lateinit var send: Button
     private lateinit var title: TextView
+    private lateinit var modelButton: TextView
+    private val scanHandler = Handler(Looper.getMainLooper())
+    private var scanVersion = 0
     private val executor = Executors.newSingleThreadExecutor()
     private val messages = mutableListOf<Pair<String, String>>()
     private data class Chat(val id: String, val title: String, val time: Long, val entries: List<Pair<String, String>>)
@@ -62,14 +69,14 @@ class MainActivity : Activity() {
         }).build()
     }
     private val prefs by lazy { getSharedPreferences("provider", MODE_PRIVATE) }
-    private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI · Responses", "OpenAI · Chat Completions")
+    private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI · Responses", "OpenAI · Chat Completions", "Ollama")
     private val urls = arrayOf(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent",
         "https://api.anthropic.com/v1/messages", "https://api.deepseek.com/chat/completions",
         "https://api.moonshot.ai/v1/chat/completions", "https://api.openai.com/v1/responses",
-        "https://api.openai.com/v1/chat/completions"
+        "https://api.openai.com/v1/chat/completions", "http://192.168.1.100:11434/api/chat"
     )
-    private val models = arrayOf("gemini-3.5-flash", "claude-opus-5-5", "deepseek-flash", "kimi-k3", "gpt-6.2-astra", "gpt-6.2-astra")
+    private val models = arrayOf("gemini-3.5-flash", "claude-opus-5-5", "deepseek-flash", "kimi-k3", "gpt-6.2-astra", "gpt-6.2-astra", "")
     private var busy = false
     private var generation = 0
 
@@ -99,7 +106,7 @@ class MainActivity : Activity() {
         buildScreen()
         val restoredId = savedInstanceState?.getString("chatId")
         chats.find { it.id == restoredId }?.let { openChat(it) }
-        if (prefs.getString("key", "").isNullOrBlank()) showSettings("providers")
+        if (prefs.getString("active_provider_id", null) == null) showSettings("providers")
     }
     private fun dp(n: Int) = (resources.displayMetrics.density * n).toInt()
     private fun shape(color: Int, radius: Int = 18) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius).toFloat() }
@@ -117,10 +124,13 @@ class MainActivity : Activity() {
         title = text(prefs.getString("name", "Tu espacio para pensar") ?: "Tu espacio para pensar", 12f, muted)
         brand.addView(title)
         header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(text("＋", 26f, muted).apply {
-            gravity = Gravity.CENTER; contentDescription = "Nueva conversación"
-            setOnClickListener { if (!busy) newChat() else Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() }
-        }, LinearLayout.LayoutParams(dp(44), dp(44)))
+        modelButton = text("Elegir modelo  ▾", 14f, ink).apply {
+            gravity = Gravity.CENTER; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(12), 0, dp(12), 0); background = shape(panel, 14); contentDescription = "Seleccionar modelo"
+            setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else showModelPicker() }
+        }
+        header.addView(modelButton, LinearLayout.LayoutParams(dp(140), dp(42)))
+        refreshModelButton()
         root.addView(header)
         scroller = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
         transcript = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(18), dp(22), dp(18)) }
@@ -151,7 +161,7 @@ class MainActivity : Activity() {
             setPadding(dp(if (isUser) 16 else 4), dp(12), dp(if (isUser) 16 else 4), dp(12))
             if (isUser) background = shape(panel, 18)
         }
-        if (!isUser) block.addView(text(if (isError) "ERROR" else (prefs.getString("name", "Asistente") ?: "Asistente"), 12f, accent).apply { typeface = Typeface.DEFAULT_BOLD })
+        if (!isUser) block.addView(text(if (isError) "ERROR" else "Asistente", 12f, accent).apply { typeface = Typeface.DEFAULT_BOLD })
         val body = text("", 16f).apply { setTextIsSelectable(true); setPadding(0, if (isUser) 0 else dp(8), 0, 0); setLineSpacing(dp(4).toFloat(), 1f) }
         if (isUser || isError) body.text = content else markdown.setMarkdown(body, content)
         block.addView(body)
@@ -244,7 +254,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             settingsOverlay != null -> when (settingsPage) {
-                "editor" -> showSettings("providers")
+                "editor" -> { scanVersion++; scanHandler.removeCallbacksAndMessages(null); showSettings("providers") }
                 "providers", "general", "changes" -> showSettings("home")
                 else -> closeSettings()
             }
@@ -288,15 +298,21 @@ class MainActivity : Activity() {
         saveHistory()
     }
     override fun onSaveInstanceState(outState: Bundle) { outState.putString("chatId", chatId); super.onSaveInstanceState(outState) }
+    private fun legacyModel(type: Int, url: String, model: String): String = if (type == 0) try { URL(url).path.substringAfterLast("/models/").substringBefore(":") } catch (_: Exception) { "" } else model
     private fun loadProviders() {
         val stored = prefs.getString("providers_v1", null)
         if (stored != null) {
             try {
                 val array = JSONArray(stored)
                 for (i in 0 until array.length()) {
-                    val p = array.getJSONObject(i)
-                    providers.add(Provider(p.getString("id"), p.getInt("type"), p.getString("name"), p.getString("url"), p.getString("model"), p.getString("key"), p.getBoolean("custom")))
+                    val p = array.getJSONObject(i); val type = p.getInt("type"); val url = p.getString("url"); val model = p.getString("model"); val key = p.getString("key")
+                    val selected = mutableListOf<ModelInfo>(); val saved = p.optJSONArray("selected")
+                    if (saved != null) for (j in 0 until saved.length()) { val m = saved.getJSONObject(j); selected.add(ModelInfo(m.getString("id"), m.getString("name"), m.optString("detail"))) }
+                    else if (key.isNotBlank()) { val id = legacyModel(type, url, model); if (id.isNotBlank()) selected.add(ModelInfo(id, ModelDiscovery.friendlyName(id))) }
+                    providers.add(Provider(p.getString("id"), type, p.getString("name"), url, model, key, p.getBoolean("custom"), selected))
                 }
+                for (type in names.indices) if (providers.none { it.id == "preset_$type" }) providers.add(Provider("preset_$type", type, names[type], urls[type], models[type], "", false))
+                saveProviders()
             } catch (_: Exception) {
                 providers.clear(); providersAvailable = false
                 Toast.makeText(this, "No se pudo leer la configuración de proveedores; se conserva el archivo original.", Toast.LENGTH_LONG).show()
@@ -307,12 +323,11 @@ class MainActivity : Activity() {
         val oldKey = prefs.getString("key", "").orEmpty()
         if (oldKey.isNotBlank()) {
             val type = prefs.getInt("type", 0).coerceIn(0, names.lastIndex)
-            val oldName = prefs.getString("name", names[type]).orEmpty()
-            val oldUrl = prefs.getString("url", urls[type]).orEmpty()
-            val oldModel = prefs.getString("model", models[type]).orEmpty()
+            val oldName = prefs.getString("name", names[type]).orEmpty(); val oldUrl = prefs.getString("url", urls[type]).orEmpty(); val oldModel = prefs.getString("model", models[type]).orEmpty()
             val isPreset = oldName == names[type] && oldUrl == urls[type]
             val id = if (isPreset) "preset_$type" else "custom_" + UUID.randomUUID()
-            val migrated = Provider(id, type, oldName, oldUrl, oldModel, oldKey, !isPreset)
+            val model = legacyModel(type, oldUrl, oldModel)
+            val migrated = Provider(id, type, oldName, oldUrl, oldModel, oldKey, !isPreset, if (model.isNotBlank()) listOf(ModelInfo(model, ModelDiscovery.friendlyName(model))) else emptyList())
             if (isPreset) providers[type] = migrated else providers.add(migrated)
             prefs.edit().putString("active_provider_id", id).apply()
         }
@@ -321,19 +336,33 @@ class MainActivity : Activity() {
     private fun saveProviders() {
         if (!providersAvailable) return
         val array = JSONArray()
-        providers.forEach { p -> array.put(JSONObject().put("id", p.id).put("type", p.type).put("name", p.name).put("url", p.url).put("model", p.model).put("key", p.key).put("custom", p.custom)) }
+        providers.forEach { p ->
+            val selected = JSONArray(); p.selected.forEach { m -> selected.put(JSONObject().put("id", m.id).put("name", m.name).put("detail", m.detail)) }
+            array.put(JSONObject().put("id", p.id).put("type", p.type).put("name", p.name).put("url", p.url).put("model", p.model).put("key", p.key).put("custom", p.custom).put("selected", selected))
+        }
         prefs.edit().putString("providers_v1", array.toString()).apply()
     }
-    private fun activateProvider(provider: Provider) {
-        val oldId = prefs.getString("active_provider_id", null)
-        val oldUrl = prefs.getString("url", "")
-        val oldModel = prefs.getString("model", "")
+    private fun activateProvider(provider: Provider, model: ModelInfo) {
+        val endpoint = try { ModelDiscovery.endpointForModel(provider.url, provider.type, model.id) } catch (e: Exception) {
+            Toast.makeText(this, e.message ?: "No se pudo seleccionar el modelo.", Toast.LENGTH_LONG).show(); return
+        }
         prefs.edit().putString("active_provider_id", provider.id).putInt("type", provider.type).putString("name", provider.name)
-            .putString("url", provider.url).putString("model", provider.model).putString("key", provider.key).apply()
-        if (oldId != provider.id || oldUrl != provider.url || oldModel != provider.model) newChat()
-        title.text = provider.name
+            .putString("url", endpoint).putString("model", model.id).putString("model_name", model.name).putString("key", provider.key).apply()
+        title.text = provider.name; refreshModelButton()
+    }
+    private fun refreshModelButton() {
+        if (::modelButton.isInitialized) modelButton.text = (prefs.getString("model_name", null) ?: prefs.getString("model", "Elegir modelo")?.takeIf { it.isNotBlank() }?.let { ModelDiscovery.friendlyName(it) } ?: "Elegir modelo") + "  ▾"
+    }
+    private fun showModelPicker() {
+        val choices = providers.flatMap { p -> p.selected.map { p to it } }
+        if (choices.isEmpty()) { showSettings("providers"); return }
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(8), dp(18), dp(14)) }
+        val dialog = AlertDialog.Builder(this).setTitle("Selecciona un modelo").setView(ScrollView(this).apply { addView(container) }).setNegativeButton("Cerrar", null).create()
+        choices.forEach { (provider, model) -> settingsRow(container, model.name, provider.name) { activateProvider(provider, model); dialog.dismiss() } }
+        dialog.show()
     }
     private fun closeSettings() {
+        scanVersion++; scanHandler.removeCallbacksAndMessages(null)
         settingsOverlay?.let { screen.removeView(it) }; settingsOverlay = null; settingsPage = ""; editingId = null
     }
     private fun showSettings(page: String, providerId: String? = null) {
@@ -381,7 +410,7 @@ class MainActivity : Activity() {
                     val active = prefs.getString("active_provider_id", null)
                     body.addView(text("Elige un proveedor para configurarlo y usarlo.", 14f, muted).apply { setPadding(0, 0, 0, dp(16)) })
                     providers.forEach { p ->
-                        val description = when { p.id == active -> "En uso · ${protocolName(p.type)}"; p.key.isNotBlank() -> "Configurado · ${protocolName(p.type)}"; else -> "Sin configurar · ${protocolName(p.type)}" }
+                        val description = when { p.id == active -> "En uso · ${protocolName(p.type)}"; (p.key.isNotBlank() || p.type == 6) && p.selected.isNotEmpty() -> "${p.selected.size} modelos · ${protocolName(p.type)}"; else -> "Sin configurar · ${protocolName(p.type)}" }
                         settingsRow(body, p.name, description) { if (providersAvailable) showSettings("editor", p.id) }
                     }
                     val add = button("＋  Agregar proveedor").apply { setTextColor(accent); setOnClickListener { if (providersAvailable) showSettings("editor") } }
@@ -400,63 +429,141 @@ class MainActivity : Activity() {
         row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f)); row.addView(text("›", 24f, muted))
         parent.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
     }
-    private fun protocolName(type: Int) = when (type) { 0 -> "Gemini nativo"; 1 -> "Anthropic Messages"; 4 -> "OpenAI Responses"; else -> "Chat Completions" }
+    private fun protocolName(type: Int) = when (type) { 0 -> "Gemini nativo"; 1 -> "Anthropic Messages"; 4 -> "OpenAI Responses"; 6 -> "Ollama nativo"; else -> "Chat Completions" }
     private fun renderProviderEditor(body: LinearLayout, providerId: String?) {
         val existing = providers.find { it.id == providerId }
-        if (providerId != null && existing == null) { showSettings("providers"); return }
+        if (providerId != null && existing == null) return
         var type = existing?.type ?: 5
+        val chosen = linkedMapOf<String, ModelInfo>()
+        existing?.selected?.forEach { chosen[it.id] = it }
+        body.addView(text("Tu conexión", 25f).apply { typeface = Typeface.create("serif", Typeface.NORMAL) })
+        body.addView(text("Configura el proveedor y elige solo los modelos que quieras usar.", 14f, muted).apply { setPadding(0, dp(6), 0, dp(18)) })
+        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(16), dp(16), dp(16)); background = shape(Color.WHITE, 18) }
+        body.addView(card)
         var selector: Spinner? = null
         if (existing == null) {
-            body.addView(text("Protocolo compatible", 13f, muted))
-            val options = arrayOf("Google Gemini nativo", "OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages")
-            selector = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, options); setSelection(1) }
-            body.addView(selector, LinearLayout.LayoutParams(-1, dp(48)))
-        } else body.addView(text("Protocolo: ${protocolName(type)}", 13f, muted).apply { setPadding(0, 0, 0, dp(6)) })
-        fun field(label: String, value: String, secret: Boolean = false): EditText {
-            body.addView(text(label, 13f, muted).apply { setPadding(0, dp(14), 0, 0) })
-            return EditText(this).apply { setSingleLine(true); textSize = 15f; if (secret) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setText(value); body.addView(this) }
+            card.addView(text("COMPATIBILIDAD", 11f, muted).apply { typeface = Typeface.DEFAULT_BOLD })
+            val options = arrayOf("Google Gemini", "OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages", "Ollama nativo")
+            selector = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, options); setSelection(1); background = shape(bg, 10) }
+            card.addView(selector, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(7); bottomMargin = dp(8) })
+        } else card.addView(text(protocolName(type).uppercase(), 11f, accent).apply { typeface = Typeface.DEFAULT_BOLD })
+        fun field(label: String, hintText: String, value: String, secret: Boolean = false): EditText {
+            card.addView(text(label, 13f, ink).apply { setPadding(0, dp(14), 0, dp(7)); typeface = Typeface.DEFAULT_BOLD })
+            val edit = EditText(this).apply {
+                setSingleLine(true); textSize = 15f; setTextColor(ink); setHintTextColor(muted); hint = hintText
+                background = shape(bg, 12); setPadding(dp(14), dp(12), dp(14), dp(12))
+                if (secret) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                setText(value)
+            }
+            card.addView(edit, LinearLayout.LayoutParams(-1, dp(50)))
+            return edit
         }
-        val name = field("Nombre del proveedor", existing?.name ?: "")
-        val url = field("URL HTTPS completa del endpoint", existing?.url ?: "")
-        val model = field("Modelo (Gemini usa el de la URL)", existing?.model ?: "")
-        val key = field("API key (texto plano para pruebas)", existing?.key ?: "", true)
-        if (selector != null) {
-            val types = intArrayOf(0, 5, 4, 1)
-            selector.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { type = types[position] }
+        val name = field("Nombre", "Ej. Mi proveedor", existing?.name.orEmpty())
+        val url = field("URL del endpoint", "https://…", existing?.url.orEmpty())
+        val key = field("API key", "Clave del proveedor", existing?.key.orEmpty(), true)
+        card.addView(text("Las claves se guardan en texto plano. Ollama local puede usar HTTP sin cifrar: úsalo solo en redes de confianza.", 12f, muted).apply { setPadding(0, dp(14), 0, 0) })
+        val modelHeader = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, dp(24), 0, dp(6)) }
+        modelHeader.addView(text("Modelos disponibles", 20f).apply { typeface = Typeface.create("serif", Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
+        val refresh = text("Actualizar", 13f, accent).apply { setPadding(dp(12), dp(10), dp(12), dp(10)); background = shape(panel, 10) }
+        modelHeader.addView(refresh); body.addView(modelHeader)
+        val status = text("Completa nombre, URL y clave para buscar modelos.", 13f, muted)
+        body.addView(status, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        body.addView(list)
+        var discovered = emptyList<ModelInfo>()
+        fun drawModels() {
+            list.removeAllViews()
+            val all = linkedMapOf<String, ModelInfo>()
+            chosen.values.forEach { all[it.id] = it }; discovered.forEach { if (!all.containsKey(it.id)) all[it.id] = it }
+            all.values.forEach { model ->
+                val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; background = shape(Color.WHITE, 14); setPadding(dp(14), dp(11), dp(10), dp(11)) }
+                val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                labels.addView(text(model.name, 15f).apply { typeface = Typeface.DEFAULT_BOLD })
+                labels.addView(text(model.id, 12f, muted).apply { setPadding(0, dp(3), 0, 0); maxLines = 2 })
+                if (model.detail.isNotBlank()) labels.addView(text(model.detail, 11f, muted).apply { setPadding(0, dp(3), 0, 0); maxLines = 3 })
+                row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f))
+                val selected = chosen.containsKey(model.id)
+                val toggle = text(if (selected) "−" else "+", 24f, if (selected) Color.WHITE else accent).apply {
+                    gravity = Gravity.CENTER; background = shape(if (selected) accent else panel, 12)
+                    contentDescription = (if (selected) "Quitar " else "Agregar ") + model.name
+                    setOnClickListener { if (chosen.containsKey(model.id)) chosen.remove(model.id) else chosen[model.id] = model; drawModels() }
+                }
+                row.addView(toggle, LinearLayout.LayoutParams(dp(42), dp(42)))
+                list.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
             }
         }
-        body.addView(text("La clave se guarda sin cifrar y se envía a la URL indicada. Usa solo servidores de confianza.", 12f, muted).apply { setPadding(0, dp(14), 0, dp(8)) })
-        body.addView(button("Guardar y usar").apply {
-            setTextColor(Color.WHITE); background = shape(accent, 14)
-            setOnClickListener {
-                val endpoint = url.text.toString().trim()
-                val validUrl = try { URL(endpoint).let { it.protocol == "https" && it.host.isNotBlank() && it.userInfo == null } } catch (_: Exception) { false }
-                if (!validUrl || name.text.isBlank() || key.text.isBlank() || (type != 0 && model.text.isBlank())) {
-                    Toast.makeText(this@MainActivity, "Completa nombre, URL HTTPS, modelo y clave.", Toast.LENGTH_LONG).show()
-                } else {
-                    val p = Provider(existing?.id ?: "custom_" + UUID.randomUUID(), type, name.text.toString().trim(), endpoint, model.text.toString().trim(), key.text.toString().trim(), existing?.custom ?: true)
-                    val index = providers.indexOfFirst { it.id == p.id }
-                    if (index >= 0) providers[index] = p else providers.add(p)
-                    saveProviders(); activateProvider(p); closeSettings()
+        drawModels()
+        val manual = EditText(this).apply { hint = "ID de modelo manual (opcional)"; textSize = 14f; setSingleLine(true); background = shape(Color.WHITE, 12); setPadding(dp(14), dp(12), dp(14), dp(12)) }
+        body.addView(manual, LinearLayout.LayoutParams(-1, dp(50)).apply { topMargin = dp(6) })
+        body.addView(text("＋  Agregar ID manual", 14f, accent).apply { setPadding(dp(8), dp(12), 0, dp(12)); setOnClickListener { val id = manual.text.toString().trim(); if (id.isNotBlank()) { chosen[id] = ModelInfo(id, ModelDiscovery.friendlyName(id)); manual.setText(""); drawModels() } } })
+        fun validInputs() = name.text.isNotBlank() && ModelDiscovery.isAllowedEndpoint(url.text.toString().trim(), type) && (type == 6 || key.text.isNotBlank())
+        fun doScan() {
+            val version = ++scanVersion
+            scanHandler.removeCallbacksAndMessages(null)
+            if (!validInputs()) { discovered = emptyList(); drawModels(); status.text = "Completa nombre, URL válida y clave para buscar modelos."; return }
+            val endpoint = url.text.toString().trim(); val secret = key.text.toString().trim(); val capturedType = type
+            status.text = "Buscando modelos…"
+            executor.execute {
+                val result = try { Result.success(ModelDiscovery.fetch(endpoint, capturedType, secret)) } catch (e: Exception) { Result.failure(e) }
+                runOnUiThread {
+                    if (isDestroyed || version != scanVersion || settingsPage != "editor" || !body.isAttachedToWindow) return@runOnUiThread
+                    result.fold(onSuccess = { found -> discovered = found; found.forEach { if (chosen.containsKey(it.id)) chosen[it.id] = it }; drawModels(); status.text = if (found.isEmpty()) "No se encontraron modelos. Puedes agregar un ID manual." else "${found.size} modelos encontrados · toca + para agregar" },
+                        onFailure = { discovered = emptyList(); drawModels(); status.text = "No se pudieron consultar los modelos. ${it.message ?: "Error de conexión."} Puedes agregar un ID manual." })
                 }
             }
-        }, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
+        }
+        fun scheduleScan() {
+            val version = ++scanVersion; scanHandler.removeCallbacksAndMessages(null)
+            discovered = emptyList(); drawModels()
+            if (!validInputs()) { status.text = "Completa nombre, URL válida y clave para buscar modelos."; return }
+            status.text = "Preparando búsqueda…"
+            scanHandler.postDelayed({ if (version == scanVersion) doScan() }, 1200)
+        }
+        val watcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) { scheduleScan() }
+        }
+        name.addTextChangedListener(watcher); url.addTextChangedListener(watcher); key.addTextChangedListener(watcher)
+        if (selector != null) {
+            val types = intArrayOf(0, 5, 4, 1, 6)
+            selector.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { val newType = types[position]; if (newType != type) { type = newType; chosen.clear(); scheduleScan() } }
+            }
+        }
+        refresh.setOnClickListener { doScan() }
+        body.addView(button("Guardar proveedor").apply {
+            setTextColor(Color.WHITE); background = shape(accent, 14)
+            setOnClickListener {
+                if (!validInputs()) { Toast.makeText(this@MainActivity, "Completa nombre, URL válida y clave (opcional para Ollama).", Toast.LENGTH_LONG).show(); return@setOnClickListener }
+                val p = Provider(existing?.id ?: "custom_" + UUID.randomUUID(), type, name.text.toString().trim(), url.text.toString().trim(), chosen.values.firstOrNull()?.id.orEmpty(), key.text.toString().trim(), existing?.custom ?: true, chosen.values.toList())
+                val index = providers.indexOfFirst { it.id == p.id }; if (index >= 0) providers[index] = p else providers.add(p)
+                saveProviders()
+                val active = prefs.getString("active_provider_id", null)
+                if (active == p.id || active == null) {
+                    val selected = p.selected.find { it.id == prefs.getString("model", "") } ?: p.selected.firstOrNull()
+                    if (selected != null) activateProvider(p, selected)
+                    else if (active == p.id) { prefs.edit().remove("active_provider_id").remove("model_name").remove("model").remove("key").apply(); title.text = "Sin modelo"; refreshModelButton() }
+                }
+                closeSettings()
+            }
+        }, LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(16) })
         if (existing?.custom == true) body.addView(button("Eliminar proveedor").apply {
             setTextColor(accent)
             setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle("Eliminar proveedor").setMessage("Se borrarán su configuración y su clave de este dispositivo.")
                 .setPositiveButton("Eliminar") { _, _ ->
                     providers.removeAll { it.id == existing.id }; saveProviders()
-                    if (prefs.getString("active_provider_id", null) == existing.id) { prefs.edit().remove("active_provider_id").remove("key").remove("url").remove("model").remove("name").apply(); title.text = "Sin proveedor"; newChat() }
+                    if (prefs.getString("active_provider_id", null) == existing.id) { prefs.edit().remove("active_provider_id").remove("key").remove("url").remove("model").remove("model_name").remove("name").apply(); title.text = "Sin modelo"; refreshModelButton() }
                     showSettings("providers")
                 }.setNegativeButton("Cancelar", null).show() }
         }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
+        scheduleScan()
     }
     private fun sendMessage() {
         val content = composer.text.toString().trim()
         if (content.isEmpty() || busy) return
-        if (prefs.getString("key", "").isNullOrBlank()) { showSettings("providers"); return }
+        if (prefs.getString("active_provider_id", null) == null || prefs.getString("model", "").isNullOrBlank()) { showModelPicker(); return }
         val type = prefs.getInt("type", 0); val endpoint = prefs.getString("url", "")!!; val key = prefs.getString("key", "")!!; val model = prefs.getString("model", "")!!
         messages.add("user" to content); if (messages.size == 1) transcript.removeAllViews(); addMessage("user", content); composer.setText("")
         busy = true; send.isEnabled = false; send.text = "…"
@@ -480,9 +587,11 @@ class MainActivity : Activity() {
             0 -> { val contents = JSONArray(); history.forEach { (role, value) -> contents.put(JSONObject().put("role", if (role == "assistant") "model" else "user").put("parts", JSONArray().put(JSONObject().put("text", value)))) }; body.put("contents", contents) }
             1 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("max_tokens", 2048).put("messages", list) }
             2, 3, 5 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("messages", list).put("stream", false) }
+            6 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("messages", list).put("stream", false) }
             4 -> { val list = JSONArray(); history.forEach { (role, value) -> list.put(JSONObject().put("role", role).put("content", value)) }; body.put("model", model).put("input", list).put("store", false) }
             else -> error("Proveedor desconocido")
         }
+        require(ModelDiscovery.isAllowedEndpoint(endpoint, type)) { "URL no permitida. Usa HTTPS o una dirección local HTTP para Ollama." }
         val connection = URL(endpoint).openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"; connection.connectTimeout = 30000; connection.readTimeout = 180000; connection.doOutput = true
@@ -491,7 +600,7 @@ class MainActivity : Activity() {
             when (type) {
                 0 -> connection.setRequestProperty("x-goog-api-key", key)
                 1 -> { connection.setRequestProperty("x-api-key", key); connection.setRequestProperty("anthropic-version", "2026-10-21") }
-                else -> connection.setRequestProperty("Authorization", "Bearer $key")
+                else -> if (key.isNotBlank()) connection.setRequestProperty("Authorization", "Bearer $key")
             }
             connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val status = connection.responseCode
@@ -506,7 +615,7 @@ class MainActivity : Activity() {
                         else -> parsed.optString("message")
                     }
                 } catch (_: Exception) { "" }
-                val safeMessage = serverMessage.replace(key, "[clave oculta]").take(400)
+                val safeMessage = (if (key.isNotBlank()) serverMessage.replace(key, "[clave oculta]") else serverMessage).take(400)
                 throw IllegalStateException("HTTP $status." + if (safeMessage.isNotBlank()) " $safeMessage" else " Revisa la URL, el protocolo, el modelo y la clave.")
             }
             val response = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -514,6 +623,7 @@ class MainActivity : Activity() {
             val answer = when (type) {
                 0 -> { val parts = json.getJSONArray("candidates").getJSONObject(0).getJSONObject("content").getJSONArray("parts"); (0 until parts.length()).mapNotNull { parts.optJSONObject(it)?.optString("text")?.takeIf(String::isNotBlank) }.joinToString("\n") }
                 1 -> { val blocks = json.getJSONArray("content"); (0 until blocks.length()).mapNotNull { blocks.optJSONObject(it)?.takeIf { b -> b.optString("type") == "text" }?.optString("text") }.joinToString("\n") }
+                6 -> json.getJSONObject("message").optString("content")
                 2, 3, 5 -> json.getJSONArray("choices").getJSONObject(0).getJSONObject("message").optString("content")
                 else -> { val out = json.getJSONArray("output"); val pieces = mutableListOf<String>(); for (i in 0 until out.length()) { val block = out.optJSONObject(i) ?: continue; val parts = block.optJSONArray("content") ?: continue; for (j in 0 until parts.length()) { val part = parts.optJSONObject(j) ?: continue; if (part.optString("type") == "output_text") pieces.add(part.optString("text")) } }; pieces.joinToString("\n") }
             }
@@ -521,5 +631,5 @@ class MainActivity : Activity() {
             return answer
         } finally { connection.disconnect() }
     }
-    override fun onDestroy() { generation++; executor.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { generation++; scanVersion++; scanHandler.removeCallbacksAndMessages(null); executor.shutdownNow(); super.onDestroy() }
 }
