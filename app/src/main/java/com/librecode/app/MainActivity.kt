@@ -160,9 +160,10 @@ class MainActivity : Activity() {
                     box.addView(text("Autoriza LibreCode en GitHub. Se solicita acceso a repositorios, incluidos privados, y a archivos de workflows. Introduce este código:", 14f).apply { setPadding(0, dp(12), 0, dp(12)) })
                     box.addView(text(device.userCode, 25f, accent).apply { setTextIsSelectable(true); gravity = Gravity.CENTER; typeface = Typeface.DEFAULT_BOLD })
                     box.addView(button("Abrir github.com/login/device").apply { setOnClickListener { try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/login/device"))) } catch (_: Exception) { Toast.makeText(this@MainActivity, "Abre github.com/login/device en tu navegador.", Toast.LENGTH_LONG).show() } } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(14) })
-                    box.addView(button("Cancelar").apply { setOnClickListener { dialog.dismiss() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+                    box.addView(button("Cancelar").apply { setOnClickListener { cancelled.set(true); dialog.dismiss() } }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
+                    dialog.setCancelable(false)
                     dialog.setContentView(box); dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-                    dialog.setOnDismissListener { cancelled.set(true) }; dialog.show(); dialog.window?.setLayout((resources.displayMetrics.widthPixels * .88f).toInt(), -2)
+                    dialog.show(); dialog.window?.setLayout((resources.displayMetrics.widthPixels * .88f).toInt(), -2)
                     Thread {
                         try {
                             val deadline = android.os.SystemClock.elapsedRealtime() + device.expires * 1000L
@@ -172,7 +173,7 @@ class MainActivity : Activity() {
                                 if (cancelled.get()) break
                                 val result = githubAccount.poll(device.deviceCode)
                                 if (result.has("access_token")) {
-                                    if (!cancelled.get()) { githubAccount.save(result); runOnUiThread { dialog.dismiss(); Toast.makeText(this, "GitHub conectado.", Toast.LENGTH_LONG).show() } }
+                                    if (!cancelled.get()) { githubAccount.save(result); runOnUiThread { if (!isDestroyed && dialog.isShowing) dialog.dismiss(); Toast.makeText(applicationContext, "GitHub conectado en LibreCode.", Toast.LENGTH_LONG).show() } }
                                     return@Thread
                                 }
                                 when (result.optString("error")) {

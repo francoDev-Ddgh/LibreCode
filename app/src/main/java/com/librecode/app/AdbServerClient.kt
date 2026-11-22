@@ -20,6 +20,7 @@ internal class AdbServerClient(private val port: Int = 5037) {
             soTimeout = 15000
         } catch (e: Exception) {
             close()
+            if (e is java.net.ConnectException) throw IllegalStateException("No hay un servidor ADB activo en este teléfono (127.0.0.1:5037). LibreCode todavía no incluye ni inicia Platform Tools.", e)
             throw e
         }
     }
