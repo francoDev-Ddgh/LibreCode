@@ -896,7 +896,8 @@ class MainActivity : Activity() {
         val streamView = addMessage("assistant", "").apply { text = "Generando respuesta…"; setTextColor(muted) }
         busy = true; send.isEnabled = false; send.text = "…"
         val snapshot = messages.toList(); val requestGeneration = ++generation
-        val useWorkTools = workspace == "work" && type in listOf(2, 3, 5)
+        val workspaceAtRequest = workspace == "work"
+        val useWorkTools = workspaceAtRequest && type in listOf(2, 3, 5)
         val automaticTools = prefs.getBoolean("work_auto", false)
         val savedEffort = currentEffort(); val profile = reasoningProfile
         val isPreset = providers.find { it.id == prefs.getString("active_provider_id", null) }?.custom == false
@@ -904,7 +905,11 @@ class MainActivity : Activity() {
         executor.execute {
             var lastUpdate = 0L
             val result = try {
-                Result.success(if (useWorkTools) requestWorkAdb(type, endpoint, key, model, snapshot, effort, automaticTools) else request(type, endpoint, key, model, snapshot, effort) { current ->
+                val verifiedTools = useWorkTools && probeWorkToolSupport(type, endpoint, key, model)
+                if (workspaceAtRequest && !verifiedTools) runOnUiThread {
+                    if (!isDestroyed && requestGeneration == generation) Toast.makeText(this, "No se confirmó el uso de herramientas para este modelo y proveedor; se responderá sin herramientas.", Toast.LENGTH_LONG).show()
+                }
+                Result.success(if (verifiedTools) requestWorkAdb(type, endpoint, key, model, snapshot, effort, automaticTools) else request(type, endpoint, key, model, snapshot, effort) { current ->
                     val now = android.os.SystemClock.uptimeMillis()
                     if (now - lastUpdate >= 75) {
                         lastUpdate = now
@@ -934,6 +939,29 @@ class MainActivity : Activity() {
                 })
             }
         }
+    }
+    /** Probe the actual model with an inert function. Never execute a function from the probe. */
+    private fun probeWorkToolSupport(type: Int, endpoint: String, key: String, model: String): Boolean {
+        if (!ModelDiscovery.isAllowedEndpoint(endpoint, type)) return false
+        return try {
+            val declaration = JSONObject().put("type", "function").put("function", JSONObject().put("name", "librecode_probe").put("description", "Verificación de compatibilidad, sin efectos.").put("parameters", JSONObject().put("type", "object").put("properties", JSONObject())))
+            val body = JSONObject().put("model", model).put("stream", false)
+                .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", "Llama a la función de comprobación.")))
+                .put("tools", JSONArray().put(declaration))
+                .put("tool_choice", JSONObject().put("type", "function").put("function", JSONObject().put("name", "librecode_probe")))
+            val c = URL(endpoint).openConnection() as HttpURLConnection
+            try {
+                c.requestMethod = "POST"; c.connectTimeout = 12000; c.readTimeout = 30000; c.doOutput = true; c.instanceFollowRedirects = false
+                c.setRequestProperty("Content-Type", "application/json")
+                if (key.isNotBlank()) c.setRequestProperty("Authorization", "Bearer $key")
+                c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                if (c.responseCode !in 200..299) false else {
+                    val raw = c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    val calls = JSONObject(raw).optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")?.optJSONArray("tool_calls")
+                    calls != null && (0 until calls.length()).any { calls.optJSONObject(it)?.optJSONObject("function")?.optString("name") == "librecode_probe" }
+                }
+            } finally { c.disconnect() }
+        } catch (_: Exception) { false }
     }
     private fun requestWorkAdb(type: Int, endpoint: String, key: String, model: String, history: List<Pair<String, String>>, effort: Pair<String, String>, automatic: Boolean): Reply {
         require(ModelDiscovery.isAllowedEndpoint(endpoint, type)) { "URL no permitida" }
