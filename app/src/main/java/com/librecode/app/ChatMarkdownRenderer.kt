@@ -98,7 +98,7 @@ class ChatMarkdownRenderer(private val context: Context, private val markwon: Ma
             typeface = Typeface.MONOSPACE; setTextIsSelectable(true); setHorizontallyScrolling(true)
             setPadding(dp(14), dp(8), dp(14), dp(12)); setLineSpacing(dp(3).toFloat(), 1f)
         }
-        horizontal.addView(codeView, HorizontalScrollView.LayoutParams(-2, -2)); card.addView(horizontal, LinearLayout.LayoutParams(-1, -2))
+        horizontal.addView(codeView, android.widget.FrameLayout.LayoutParams(-2, -2)); card.addView(horizontal, LinearLayout.LayoutParams(-1, -2))
         if (collapsible) {
             var expanded = false
             val toggle = label("Mostrar todo · $count líneas", 13f, accent).apply {
