@@ -34,6 +34,12 @@ class MainActivity : Activity() {
     private lateinit var root: LinearLayout
     private lateinit var screen: FrameLayout
     private var drawerOverlay: FrameLayout? = null
+    private var settingsOverlay: FrameLayout? = null
+    private var settingsPage = ""
+    private var editingId: String? = null
+    private var providersAvailable = true
+    private data class Provider(val id: String, val type: Int, val name: String, val url: String, val model: String, val key: String, val custom: Boolean)
+    private val providers = mutableListOf<Provider>()
     private lateinit var transcript: LinearLayout
     private lateinit var scroller: ScrollView
     private lateinit var composer: EditText
@@ -89,10 +95,11 @@ class MainActivity : Activity() {
         screen = FrameLayout(this).apply { addView(root) }
         setContentView(screen)
         loadHistory()
+        loadProviders()
         buildScreen()
         val restoredId = savedInstanceState?.getString("chatId")
         chats.find { it.id == restoredId }?.let { openChat(it) }
-        if (prefs.getString("key", "").isNullOrBlank()) showProviderDialog()
+        if (prefs.getString("key", "").isNullOrBlank()) showSettings("providers")
     }
     private fun dp(n: Int) = (resources.displayMetrics.density * n).toInt()
     private fun shape(color: Int, radius: Int = 18) = GradientDrawable().apply { setColor(color); cornerRadius = dp(radius).toFloat() }
@@ -107,7 +114,7 @@ class MainActivity : Activity() {
         header.addView(menu, LinearLayout.LayoutParams(dp(44), dp(44)))
         val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
         brand.addView(text("LibreCode", 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
-        title = text("Tu espacio para pensar", 12f, muted)
+        title = text(prefs.getString("name", "Tu espacio para pensar") ?: "Tu espacio para pensar", 12f, muted)
         brand.addView(title)
         header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(text("＋", 26f, muted).apply {
@@ -132,8 +139,7 @@ class MainActivity : Activity() {
     }
     private fun showWelcome() {
         transcript.removeAllViews()
-        transcript.addView(text("✳", 36f, accent).apply { gravity = Gravity.CENTER; setPadding(0, dp(55), 0, dp(12)) })
-        transcript.addView(text("¿En qué puedo ayudarte?", 27f).apply { gravity = Gravity.CENTER; typeface = Typeface.create("serif", Typeface.NORMAL) })
+        transcript.addView(text("¿En qué puedo ayudarte?", 27f).apply { gravity = Gravity.CENTER; setPadding(0, dp(70), 0, 0); typeface = Typeface.create("serif", Typeface.NORMAL) })
         transcript.addView(text("Escribe lo que tengas en mente.", 14f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(20), dp(10), dp(20), 0) })
     }
     private fun addMessage(role: String, content: String) {
@@ -145,7 +151,7 @@ class MainActivity : Activity() {
             setPadding(dp(if (isUser) 16 else 4), dp(12), dp(if (isUser) 16 else 4), dp(12))
             if (isUser) background = shape(panel, 18)
         }
-        if (!isUser) block.addView(text(if (isError) "ERROR" else "✳  " + (prefs.getString("name", "Asistente") ?: "Asistente"), 12f, accent).apply { typeface = Typeface.DEFAULT_BOLD })
+        if (!isUser) block.addView(text(if (isError) "ERROR" else (prefs.getString("name", "Asistente") ?: "Asistente"), 12f, accent).apply { typeface = Typeface.DEFAULT_BOLD })
         val body = text("", 16f).apply { setTextIsSelectable(true); setPadding(0, if (isUser) 0 else dp(8), 0, 0); setLineSpacing(dp(4).toFloat(), 1f) }
         if (isUser || isError) body.text = content else markdown.setMarkdown(body, content)
         block.addView(body)
@@ -186,7 +192,7 @@ class MainActivity : Activity() {
         } else 0
         drawer.setPadding(dp(16), topInset + dp(12), dp(16), bottomInset + dp(12))
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        header.addView(text("✳  LibreCode", 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(text("LibreCode", 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(text("×", 27f, muted).apply { gravity = Gravity.CENTER; contentDescription = "Cerrar panel"; setOnClickListener { closeDrawer() } }, LinearLayout.LayoutParams(dp(44), dp(44)))
         drawer.addView(header)
         val new = text("＋   Nuevo chat", 16f, ink).apply {
@@ -223,9 +229,9 @@ class MainActivity : Activity() {
         scroll.addView(list)
         drawer.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         drawer.addView(text("Mantén pulsado un chat para eliminarlo", 11f, muted).apply { setPadding(dp(12), dp(10), 0, dp(10)) })
-        drawer.addView(text("⚙   Configurar proveedor", 15f, ink).apply {
+        drawer.addView(text("⚙   Configuraciones", 15f, ink).apply {
             gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(10), 0, dp(10))
-            setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else { closeDrawer(); showProviderDialog() } }
+            setOnClickListener { if (busy) Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() else { closeDrawer(); showSettings("home") } }
         })
         val width = minOf(dp(315), (resources.displayMetrics.widthPixels * .86f).toInt())
         overlay.addView(drawer, FrameLayout.LayoutParams(width, -1, Gravity.START))
@@ -235,7 +241,17 @@ class MainActivity : Activity() {
         drawer.animate().translationX(0f).setDuration(200).start()
     }
     @Deprecated("Deprecated in Android")
-    override fun onBackPressed() { if (drawerOverlay != null) closeDrawer() else super.onBackPressed() }
+    override fun onBackPressed() {
+        when {
+            settingsOverlay != null -> when (settingsPage) {
+                "editor" -> showSettings("providers")
+                "providers", "general", "changes" -> showSettings("home")
+                else -> closeSettings()
+            }
+            drawerOverlay != null -> closeDrawer()
+            else -> super.onBackPressed()
+        }
+    }
     private fun newChat() {
         chatId = UUID.randomUUID().toString(); messages.clear(); composer.setText(""); showWelcome()
     }
@@ -272,51 +288,175 @@ class MainActivity : Activity() {
         saveHistory()
     }
     override fun onSaveInstanceState(outState: Bundle) { outState.putString("chatId", chatId); super.onSaveInstanceState(outState) }
-    private fun showProviderDialog() {
-        val initial = prefs.getInt("type", 0).coerceIn(0, names.lastIndex)
-        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(5), dp(22), dp(8)) }
-        val selector = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, names); setSelection(initial) }
-        layout.addView(text("Tipo de proveedor", 13f, muted)); layout.addView(selector)
-        fun field(label: String, value: String, secret: Boolean = false): EditText {
-            layout.addView(text(label, 13f, muted).apply { setPadding(0, dp(12), 0, 0) })
-            return EditText(this).apply { setSingleLine(true); setText(value); textSize = 15f; if (secret) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; layout.addView(this) }
+    private fun loadProviders() {
+        val stored = prefs.getString("providers_v1", null)
+        if (stored != null) {
+            try {
+                val array = JSONArray(stored)
+                for (i in 0 until array.length()) {
+                    val p = array.getJSONObject(i)
+                    providers.add(Provider(p.getString("id"), p.getInt("type"), p.getString("name"), p.getString("url"), p.getString("model"), p.getString("key"), p.getBoolean("custom")))
+                }
+            } catch (_: Exception) {
+                providers.clear(); providersAvailable = false
+                Toast.makeText(this, "No se pudo leer la configuración de proveedores; se conserva el archivo original.", Toast.LENGTH_LONG).show()
+            }
+            return
         }
-        val name = field("Nombre del proveedor", prefs.getString("name", names[initial]) ?: names[initial])
-        val url = field("URL HTTPS completa del endpoint", prefs.getString("url", urls[initial]) ?: urls[initial])
-        val model = field("Modelo (Gemini usa el de la URL)", prefs.getString("model", models[initial]) ?: models[initial])
-        val key = field("API key (guardada en texto plano)", prefs.getString("key", "") ?: "", true)
-        layout.addView(text("Solo para pruebas. La clave se guarda sin cifrar y se envía a la URL indicada.", 12f, muted).apply { setPadding(0, dp(12), 0, 0) })
-        var last = initial
-        selector.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (position != last) { name.setText(names[position]); url.setText(urls[position]); model.setText(models[position]); key.setText(""); last = position }
+        for (type in names.indices) providers.add(Provider("preset_$type", type, names[type], urls[type], models[type], "", false))
+        val oldKey = prefs.getString("key", "").orEmpty()
+        if (oldKey.isNotBlank()) {
+            val type = prefs.getInt("type", 0).coerceIn(0, names.lastIndex)
+            val oldName = prefs.getString("name", names[type]).orEmpty()
+            val oldUrl = prefs.getString("url", urls[type]).orEmpty()
+            val oldModel = prefs.getString("model", models[type]).orEmpty()
+            val isPreset = oldName == names[type] && oldUrl == urls[type]
+            val id = if (isPreset) "preset_$type" else "custom_" + UUID.randomUUID()
+            val migrated = Provider(id, type, oldName, oldUrl, oldModel, oldKey, !isPreset)
+            if (isPreset) providers[type] = migrated else providers.add(migrated)
+            prefs.edit().putString("active_provider_id", id).apply()
+        }
+        saveProviders()
+    }
+    private fun saveProviders() {
+        if (!providersAvailable) return
+        val array = JSONArray()
+        providers.forEach { p -> array.put(JSONObject().put("id", p.id).put("type", p.type).put("name", p.name).put("url", p.url).put("model", p.model).put("key", p.key).put("custom", p.custom)) }
+        prefs.edit().putString("providers_v1", array.toString()).apply()
+    }
+    private fun activateProvider(provider: Provider) {
+        val oldId = prefs.getString("active_provider_id", null)
+        val oldUrl = prefs.getString("url", "")
+        val oldModel = prefs.getString("model", "")
+        prefs.edit().putString("active_provider_id", provider.id).putInt("type", provider.type).putString("name", provider.name)
+            .putString("url", provider.url).putString("model", provider.model).putString("key", provider.key).apply()
+        if (oldId != provider.id || oldUrl != provider.url || oldModel != provider.model) newChat()
+        title.text = provider.name
+    }
+    private fun closeSettings() {
+        settingsOverlay?.let { screen.removeView(it) }; settingsOverlay = null; settingsPage = ""; editingId = null
+    }
+    private fun showSettings(page: String, providerId: String? = null) {
+        settingsOverlay?.let { screen.removeView(it) }
+        settingsPage = page; editingId = providerId
+        val frame = FrameLayout(this).apply { setBackgroundColor(bg); isClickable = true }
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val insets = root.rootWindowInsets
+        val top = if (insets == null) 0 else if (Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout()).top else @Suppress("DEPRECATION") insets.systemWindowInsetTop
+        val bottom = if (insets == null) 0 else if (Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.systemBars()).bottom else @Suppress("DEPRECATION") insets.systemWindowInsetBottom
+        column.setPadding(0, top, 0, bottom)
+        frame.setOnApplyWindowInsetsListener { _, current ->
+            if (Build.VERSION.SDK_INT >= 30) {
+                val bars = current.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                val keyboard = current.getInsets(WindowInsets.Type.ime())
+                column.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            } else {
+                @Suppress("DEPRECATION")
+                column.setPadding(current.systemWindowInsetLeft, current.systemWindowInsetTop, current.systemWindowInsetRight, current.systemWindowInsetBottom)
+            }
+            current
+        }
+        frame.addView(column, FrameLayout.LayoutParams(-1, -1))
+        val bar = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(12), dp(8), dp(18), dp(8)) }
+        bar.addView(text("‹", 34f, ink).apply { gravity = Gravity.CENTER; contentDescription = "Volver"; setOnClickListener { onBackPressed() } }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        val heading = when (page) { "home" -> "Configuraciones"; "providers" -> "Proveedores"; "general" -> "Ajustes generales"; "changes" -> "Cambios generales"; else -> if (providerId == null) "Agregar proveedor" else "Configurar proveedor" }
+        bar.addView(text(heading, 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) }, LinearLayout.LayoutParams(0, -2, 1f))
+        column.addView(bar)
+        if (page == "general" || page == "changes") {
+            column.setBackgroundColor(Color.WHITE)
+            column.addView(text("Próximamente", 19f, muted).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(-1, 0, 1f))
+        } else {
+            val scroll = ScrollView(this).apply { isFillViewport = true }
+            val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(14), dp(22), dp(24)) }
+            scroll.addView(body); column.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+            when (page) {
+                "home" -> {
+                    body.addView(text("Personaliza tu experiencia", 15f, muted).apply { setPadding(0, 0, 0, dp(18)) })
+                    settingsRow(body, "Proveedores", "Configura tus modelos y conexiones") { showSettings("providers") }
+                    settingsRow(body, "Ajustes generales", "Próximamente") { showSettings("general") }
+                    settingsRow(body, "Cambios generales", "Próximamente") { showSettings("changes") }
+                }
+                "providers" -> {
+                    if (!providersAvailable) body.addView(text("No se pueden modificar los proveedores porque no se pudo leer su configuración.", 14f, accent))
+                    val active = prefs.getString("active_provider_id", null)
+                    body.addView(text("Elige un proveedor para configurarlo y usarlo.", 14f, muted).apply { setPadding(0, 0, 0, dp(16)) })
+                    providers.forEach { p ->
+                        val description = when { p.id == active -> "En uso · ${protocolName(p.type)}"; p.key.isNotBlank() -> "Configurado · ${protocolName(p.type)}"; else -> "Sin configurar · ${protocolName(p.type)}" }
+                        settingsRow(body, p.name, description) { if (providersAvailable) showSettings("editor", p.id) }
+                    }
+                    val add = button("＋  Agregar proveedor").apply { setTextColor(accent); setOnClickListener { if (providersAvailable) showSettings("editor") } }
+                    body.addView(add, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(14) })
+                }
+                "editor" -> renderProviderEditor(body, providerId)
             }
         }
-        val scroll = ScrollView(this).apply { addView(layout) }
-        val dialog = AlertDialog.Builder(this).setTitle("Conectar proveedor").setView(scroll).setPositiveButton("Guardar", null).setNegativeButton("Cancelar") { _, _ -> }.create()
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+        screen.addView(frame, FrameLayout.LayoutParams(-1, -1)); settingsOverlay = frame
+    }
+    private fun settingsRow(parent: LinearLayout, label: String, detail: String, click: () -> Unit) {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; background = shape(Color.WHITE, 14); setPadding(dp(16), dp(13), dp(16), dp(13)); setOnClickListener { click() } }
+        val labels = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        labels.addView(text(label, 16f).apply { typeface = Typeface.DEFAULT_BOLD })
+        labels.addView(text(detail, 12f, muted).apply { setPadding(0, dp(4), 0, 0) })
+        row.addView(labels, LinearLayout.LayoutParams(0, -2, 1f)); row.addView(text("›", 24f, muted))
+        parent.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(9) })
+    }
+    private fun protocolName(type: Int) = when (type) { 0 -> "Gemini nativo"; 1 -> "Anthropic Messages"; 4 -> "OpenAI Responses"; else -> "Chat Completions" }
+    private fun renderProviderEditor(body: LinearLayout, providerId: String?) {
+        val existing = providers.find { it.id == providerId }
+        if (providerId != null && existing == null) { showSettings("providers"); return }
+        var type = existing?.type ?: 5
+        var selector: Spinner? = null
+        if (existing == null) {
+            body.addView(text("Protocolo compatible", 13f, muted))
+            val options = arrayOf("Google Gemini nativo", "OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages")
+            selector = Spinner(this).apply { adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, options); setSelection(1) }
+            body.addView(selector, LinearLayout.LayoutParams(-1, dp(48)))
+        } else body.addView(text("Protocolo: ${protocolName(type)}", 13f, muted).apply { setPadding(0, 0, 0, dp(6)) })
+        fun field(label: String, value: String, secret: Boolean = false): EditText {
+            body.addView(text(label, 13f, muted).apply { setPadding(0, dp(14), 0, 0) })
+            return EditText(this).apply { setSingleLine(true); textSize = 15f; if (secret) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; setText(value); body.addView(this) }
+        }
+        val name = field("Nombre del proveedor", existing?.name ?: "")
+        val url = field("URL HTTPS completa del endpoint", existing?.url ?: "")
+        val model = field("Modelo (Gemini usa el de la URL)", existing?.model ?: "")
+        val key = field("API key (texto plano para pruebas)", existing?.key ?: "", true)
+        if (selector != null) {
+            val types = intArrayOf(0, 5, 4, 1)
+            selector.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) { type = types[position] }
+            }
+        }
+        body.addView(text("La clave se guarda sin cifrar y se envía a la URL indicada. Usa solo servidores de confianza.", 12f, muted).apply { setPadding(0, dp(14), 0, dp(8)) })
+        body.addView(button("Guardar y usar").apply {
+            setTextColor(Color.WHITE); background = shape(accent, 14)
+            setOnClickListener {
                 val endpoint = url.text.toString().trim()
-                val host = try { URL(endpoint).let { it.protocol == "https" && it.host.isNotBlank() && it.userInfo == null } } catch (_: Exception) { false }
-                if (!host || name.text.isBlank() || key.text.isBlank() || (selector.selectedItemPosition != 0 && model.text.isBlank())) {
-                    Toast.makeText(this, "Completa nombre, URL HTTPS, modelo y clave.", Toast.LENGTH_LONG).show()
+                val validUrl = try { URL(endpoint).let { it.protocol == "https" && it.host.isNotBlank() && it.userInfo == null } } catch (_: Exception) { false }
+                if (!validUrl || name.text.isBlank() || key.text.isBlank() || (type != 0 && model.text.isBlank())) {
+                    Toast.makeText(this@MainActivity, "Completa nombre, URL HTTPS, modelo y clave.", Toast.LENGTH_LONG).show()
                 } else {
-                    val oldType = prefs.getInt("type", -1); val oldUrl = prefs.getString("url", ""); val oldModel = prefs.getString("model", "")
-                    prefs.edit().putInt("type", selector.selectedItemPosition).putString("name", name.text.toString().trim()).putString("url", endpoint).putString("model", model.text.toString().trim()).putString("key", key.text.toString().trim()).apply()
-                    if (oldType != selector.selectedItemPosition || oldUrl != endpoint || oldModel != model.text.toString().trim()) { newChat() }
-                    title.text = name.text.toString().trim()
-                    dialog.dismiss()
+                    val p = Provider(existing?.id ?: "custom_" + UUID.randomUUID(), type, name.text.toString().trim(), endpoint, model.text.toString().trim(), key.text.toString().trim(), existing?.custom ?: true)
+                    val index = providers.indexOfFirst { it.id == p.id }
+                    if (index >= 0) providers[index] = p else providers.add(p)
+                    saveProviders(); activateProvider(p); closeSettings()
                 }
             }
-        }
-        title.text = prefs.getString("name", "Tu espacio para pensar")
-        dialog.show()
+        }, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(12) })
+        if (existing?.custom == true) body.addView(button("Eliminar proveedor").apply {
+            setTextColor(accent)
+            setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle("Eliminar proveedor").setMessage("Se borrarán su configuración y su clave de este dispositivo.")
+                .setPositiveButton("Eliminar") { _, _ ->
+                    providers.removeAll { it.id == existing.id }; saveProviders()
+                    if (prefs.getString("active_provider_id", null) == existing.id) { prefs.edit().remove("active_provider_id").remove("key").remove("url").remove("model").remove("name").apply(); title.text = "Sin proveedor"; newChat() }
+                    showSettings("providers")
+                }.setNegativeButton("Cancelar", null).show() }
+        }, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) })
     }
     private fun sendMessage() {
         val content = composer.text.toString().trim()
         if (content.isEmpty() || busy) return
-        if (prefs.getString("key", "").isNullOrBlank()) { showProviderDialog(); return }
+        if (prefs.getString("key", "").isNullOrBlank()) { showSettings("providers"); return }
         val type = prefs.getInt("type", 0); val endpoint = prefs.getString("url", "")!!; val key = prefs.getString("key", "")!!; val model = prefs.getString("model", "")!!
         messages.add("user" to content); if (messages.size == 1) transcript.removeAllViews(); addMessage("user", content); composer.setText("")
         busy = true; send.isEnabled = false; send.text = "…"
