@@ -10,7 +10,8 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.1"
+        resourceConfigurations += listOf("en", "es")
     }
     signingConfigs {
         create("releaseSigning") {
@@ -27,10 +28,16 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            isZipAlignEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (!System.getenv("RELEASE_KEYSTORE_PATH").isNullOrBlank()) signingConfig = signingConfigs.getByName("releaseSigning")
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
+}
+
+dependencies {
+    implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
 }

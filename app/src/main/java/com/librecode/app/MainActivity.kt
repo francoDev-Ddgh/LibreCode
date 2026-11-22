@@ -7,17 +7,23 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.util.AtomicFile
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.*
+import io.noties.markwon.Markwon
+import io.noties.markwon.AbstractMarkwonPlugin
+import io.noties.markwon.core.MarkwonTheme
+import io.noties.markwon.ext.tables.TablePlugin
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
+import java.util.UUID
 
 class MainActivity : Activity() {
     private val bg = Color.rgb(250, 249, 245)
@@ -33,6 +39,20 @@ class MainActivity : Activity() {
     private lateinit var title: TextView
     private val executor = Executors.newSingleThreadExecutor()
     private val messages = mutableListOf<Pair<String, String>>()
+    private data class Chat(val id: String, val title: String, val time: Long, val entries: List<Pair<String, String>>)
+    private val chats = mutableListOf<Chat>()
+    private val historyFile by lazy { AtomicFile(java.io.File(filesDir, "chats.json")) }
+    private var historyAvailable = true
+    private var chatId = UUID.randomUUID().toString()
+    private val markdown by lazy {
+        Markwon.builder(this).usePlugin(TablePlugin.create(this)).usePlugin(object : AbstractMarkwonPlugin() {
+            override fun configureTheme(builder: MarkwonTheme.Builder) {
+                builder.codeBlockBackgroundColor(Color.rgb(238, 236, 230))
+                    .codeBlockTextColor(ink).codeBlockTypeface(Typeface.MONOSPACE)
+                    .codeBackgroundColor(Color.rgb(238, 236, 230)).codeTypeface(Typeface.MONOSPACE)
+            }
+        }).build()
+    }
     private val prefs by lazy { getSharedPreferences("provider", MODE_PRIVATE) }
     private val names = arrayOf("Google Gemini", "Anthropic Claude", "DeepSeek", "Kimi", "OpenAI · Responses", "OpenAI · Chat Completions")
     private val urls = arrayOf(
@@ -65,7 +85,10 @@ class MainActivity : Activity() {
             insets
         }
         setContentView(root)
+        loadHistory()
         buildScreen()
+        val restoredId = savedInstanceState?.getString("chatId")
+        chats.find { it.id == restoredId }?.let { openChat(it) }
         showProviderDialog()
     }
     private fun dp(n: Int) = (resources.displayMetrics.density * n).toInt()
@@ -73,44 +96,128 @@ class MainActivity : Activity() {
     private fun text(value: String, size: Float, color: Int = ink) = TextView(this).apply { text = value; textSize = size; setTextColor(color) }
     private fun button(label: String) = Button(this).apply { text = label; isAllCaps = false; setTextColor(ink); background = shape(panel, 14); textSize = 14f }
     private fun buildScreen() {
-        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(22), dp(12), dp(18), dp(12)) }
-        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        brand.addView(text("✳  LibreCode", 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
+        val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(dp(16), dp(10), dp(16), dp(10)) }
+        val menu = text("☰", 23f, muted).apply {
+            gravity = Gravity.CENTER; contentDescription = "Abrir menú e historial"
+            background = shape(bg, 14); setOnClickListener { if (!busy) showMenu(this) else Toast.makeText(this@MainActivity, "Espera la respuesta actual.", Toast.LENGTH_SHORT).show() }
+        }
+        header.addView(menu, LinearLayout.LayoutParams(dp(44), dp(44)))
+        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
+        brand.addView(text("LibreCode", 22f).apply { typeface = Typeface.create("serif", Typeface.BOLD) })
         title = text("Tu espacio para pensar", 12f, muted)
         brand.addView(title)
         header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(button("Configurar").apply { setOnClickListener { if (!busy) showProviderDialog() } }, LinearLayout.LayoutParams(-2, dp(42)))
         root.addView(header)
         scroller = ScrollView(this).apply { isFillViewport = true; clipToPadding = false }
-        transcript = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(20), dp(20), dp(18)) }
+        transcript = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(18), dp(22), dp(18)) }
         scroller.addView(transcript)
         root.addView(scroller, LinearLayout.LayoutParams(-1, 0, 1f))
         val bottom = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(8), dp(16), dp(12)) }
-        val row = LinearLayout(this).apply { gravity = Gravity.BOTTOM; background = shape(Color.WHITE, 20); setPadding(dp(10), dp(5), dp(5), dp(5)) }
-        composer = EditText(this).apply { hint = "Escribe un mensaje…"; textSize = 16f; setTextColor(ink); setHintTextColor(muted); background = null; minLines = 1; maxLines = 5; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES; setPadding(dp(8), dp(12), dp(8), dp(12)) }
+        val row = LinearLayout(this).apply { gravity = Gravity.BOTTOM; background = shape(Color.WHITE, 22); setPadding(dp(12), dp(7), dp(7), dp(7)); elevation = dp(2).toFloat() }
+        composer = EditText(this).apply { hint = "¿En qué puedo ayudarte?"; textSize = 16f; setTextColor(ink); setHintTextColor(muted); background = null; minLines = 1; maxLines = 5; inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES; setPadding(dp(8), dp(12), dp(8), dp(12)) }
         row.addView(composer, LinearLayout.LayoutParams(0, -2, 1f))
-        send = button("Enviar").apply { setTextColor(Color.WHITE); background = shape(accent, 14); setOnClickListener { sendMessage() } }
-        row.addView(send, LinearLayout.LayoutParams(dp(76), dp(48)))
+        send = button("↑").apply { contentDescription = "Enviar mensaje"; textSize = 22f; setTextColor(Color.WHITE); background = shape(accent, 13); setOnClickListener { sendMessage() } }
+        row.addView(send, LinearLayout.LayoutParams(dp(46), dp(46)))
         bottom.addView(row)
-        bottom.addView(text("Una conversación sencilla, sin historial guardado.", 11f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, 0) })
+        bottom.addView(text("Las conversaciones se guardan en este dispositivo.", 11f, muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(9), 0, 0) })
         root.addView(bottom)
         showWelcome()
     }
     private fun showWelcome() {
         transcript.removeAllViews()
-        transcript.addView(text("✳", 32f, accent).apply { gravity = Gravity.CENTER; setPadding(0, dp(55), 0, dp(12)) })
+        transcript.addView(text("✳", 36f, accent).apply { gravity = Gravity.CENTER; setPadding(0, dp(55), 0, dp(12)) })
         transcript.addView(text("¿En qué puedo ayudarte?", 27f).apply { gravity = Gravity.CENTER; typeface = Typeface.create("serif", Typeface.NORMAL) })
-        transcript.addView(text("Una idea, una pregunta o algo que quieras crear.", 14f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(20), dp(10), dp(20), 0) })
+        transcript.addView(text("Escribe lo que tengas en mente.", 14f, muted).apply { gravity = Gravity.CENTER; setPadding(dp(20), dp(10), dp(20), 0) })
     }
     private fun addMessage(role: String, content: String) {
-        if (messages.size == 1 && role == "user") transcript.removeAllViews()
-        val block = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(13), dp(16), dp(13)); background = shape(if (role == "user") panel else Color.WHITE, 18) }
-        block.addView(text(if (role == "user") "TÚ" else prefs.getString("name", "ASISTENTE")!!.uppercase(), 11f, if (role == "user") muted else accent).apply { typeface = Typeface.DEFAULT_BOLD })
-        block.addView(text(content, 16f).apply { setTextIsSelectable(true); setPadding(0, dp(7), 0, 0); setLineSpacing(dp(3).toFloat(), 1f) })
-        val lp = LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) }
-        transcript.addView(block, lp)
+        val isUser = role == "user"
+        val isError = role == "error"
+        val row = LinearLayout(this).apply { gravity = if (isUser) Gravity.END else Gravity.START; setPadding(0, dp(4), 0, dp(16)) }
+        val block = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(if (isUser) 16 else 4), dp(12), dp(if (isUser) 16 else 4), dp(12))
+            if (isUser) background = shape(panel, 18)
+        }
+        if (!isUser) block.addView(text(if (isError) "ERROR" else "✳  " + (prefs.getString("name", "Asistente") ?: "Asistente"), 12f, accent).apply { typeface = Typeface.DEFAULT_BOLD })
+        val body = text("", 16f).apply { setTextIsSelectable(true); setPadding(0, if (isUser) 0 else dp(8), 0, 0); setLineSpacing(dp(4).toFloat(), 1f) }
+        if (isUser || isError) body.text = content else markdown.setMarkdown(body, content)
+        block.addView(body)
+        val width = if (isUser) (resources.displayMetrics.widthPixels * .80f).toInt() else -1
+        row.addView(block, LinearLayout.LayoutParams(width, -2))
+        transcript.addView(row, LinearLayout.LayoutParams(-1, -2))
         scroller.post { scroller.fullScroll(View.FOCUS_DOWN) }
     }
+    private fun renderConversation() {
+        transcript.removeAllViews()
+        if (messages.isEmpty()) showWelcome() else messages.forEach { (role, value) -> addMessage(role, value) }
+    }
+    private fun showMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menu.add("＋  Nueva conversación").setOnMenuItemClickListener { newChat(); true }
+        popup.menu.add("☰  Historial (${chats.size})").setOnMenuItemClickListener { showHistory(); true }
+        popup.show()
+    }
+    private fun newChat() {
+        chatId = UUID.randomUUID().toString(); messages.clear(); composer.setText(""); showWelcome()
+    }
+    private fun openChat(chat: Chat) {
+        chatId = chat.id; messages.clear(); messages.addAll(chat.entries); composer.setText(""); renderConversation()
+    }
+    private fun showHistory() {
+        if (chats.isEmpty()) { Toast.makeText(this, "Aún no hay conversaciones guardadas.", Toast.LENGTH_SHORT).show(); return }
+        val ordered = chats.sortedByDescending { it.time }
+        val labels = ordered.map { it.title }.toTypedArray()
+        val dialog = AlertDialog.Builder(this).setTitle("Historial local")
+            .setItems(labels) { _, which -> openChat(ordered[which]); Toast.makeText(this, "Se usará el proveedor configurado actualmente.", Toast.LENGTH_SHORT).show() }
+            .setNegativeButton("Cerrar", null).create()
+        dialog.setOnShowListener {
+            dialog.listView.setOnItemLongClickListener { _, _, position, _ ->
+                val chat = ordered[position]
+                AlertDialog.Builder(this).setTitle("Eliminar conversación")
+                    .setMessage("¿Eliminar «${chat.title}» del dispositivo?")
+                    .setPositiveButton("Eliminar") { _, _ ->
+                        chats.removeAll { it.id == chat.id }
+                        saveHistory()
+                        if (chatId == chat.id) newChat()
+                        dialog.dismiss()
+                    }.setNegativeButton("Cancelar", null).show()
+                true
+            }
+        }
+        dialog.show()
+        Toast.makeText(this, "Mantén pulsada una conversación para eliminarla.", Toast.LENGTH_LONG).show()
+    }
+    private fun loadHistory() {
+        if (!historyFile.baseFile.exists()) return
+        try {
+            val list = JSONArray(historyFile.openRead().bufferedReader(Charsets.UTF_8).use { it.readText() })
+            for (i in 0 until list.length()) {
+                val item = list.getJSONObject(i); val entries = item.getJSONArray("messages"); val content = mutableListOf<Pair<String, String>>()
+                for (j in 0 until entries.length()) { val m = entries.getJSONObject(j); val role = m.getString("role"); if (role == "user" || role == "assistant") content.add(role to m.getString("text")) }
+                if (content.isNotEmpty()) chats.add(Chat(item.getString("id"), item.getString("title"), item.optLong("time"), content))
+            }
+        } catch (_: Exception) { historyAvailable = false; Toast.makeText(this, "No se pudo leer el historial; el archivo original se conserva.", Toast.LENGTH_LONG).show() }
+    }
+    private fun saveHistory() {
+        if (!historyAvailable) return
+        val list = JSONArray()
+        chats.forEach { chat ->
+            val entries = JSONArray(); chat.entries.forEach { (role, value) -> entries.put(JSONObject().put("role", role).put("text", value)) }
+            list.put(JSONObject().put("id", chat.id).put("title", chat.title).put("time", chat.time).put("messages", entries))
+        }
+        var output: java.io.FileOutputStream? = null
+        try { output = historyFile.startWrite(); output.write(list.toString().toByteArray(Charsets.UTF_8)); historyFile.finishWrite(output) }
+        catch (_: Exception) { if (output != null) historyFile.failWrite(output); Toast.makeText(this, "No se pudo guardar el historial local.", Toast.LENGTH_LONG).show() }
+    }
+    private fun saveCurrentChat() {
+        if (messages.isEmpty()) return
+        val title = messages.firstOrNull { it.first == "user" }?.second?.replace('\n', ' ')?.take(55) ?: "Conversación"
+        chats.removeAll { it.id == chatId }
+        chats.add(Chat(chatId, title, System.currentTimeMillis(), messages.toList()))
+        saveHistory()
+    }
+    override fun onSaveInstanceState(outState: Bundle) { outState.putString("chatId", chatId); super.onSaveInstanceState(outState) }
     private fun showProviderDialog() {
         val initial = prefs.getInt("type", 0).coerceIn(0, names.lastIndex)
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(22), dp(5), dp(22), dp(8)) }
@@ -143,7 +250,7 @@ class MainActivity : Activity() {
                 } else {
                     val oldType = prefs.getInt("type", -1); val oldUrl = prefs.getString("url", ""); val oldModel = prefs.getString("model", "")
                     prefs.edit().putInt("type", selector.selectedItemPosition).putString("name", name.text.toString().trim()).putString("url", endpoint).putString("model", model.text.toString().trim()).putString("key", key.text.toString().trim()).apply()
-                    if (oldType != selector.selectedItemPosition || oldUrl != endpoint || oldModel != model.text.toString().trim()) { messages.clear(); showWelcome() }
+                    if (oldType != selector.selectedItemPosition || oldUrl != endpoint || oldModel != model.text.toString().trim()) { newChat() }
                     title.text = name.text.toString().trim()
                     dialog.dismiss()
                 }
@@ -157,7 +264,7 @@ class MainActivity : Activity() {
         if (content.isEmpty() || busy) return
         if (prefs.getString("key", "").isNullOrBlank()) { showProviderDialog(); return }
         val type = prefs.getInt("type", 0); val endpoint = prefs.getString("url", "")!!; val key = prefs.getString("key", "")!!; val model = prefs.getString("model", "")!!
-        messages.add("user" to content); addMessage("user", content); composer.setText("")
+        messages.add("user" to content); if (messages.size == 1) transcript.removeAllViews(); addMessage("user", content); composer.setText("")
         busy = true; send.isEnabled = false; send.text = "…"
         val snapshot = messages.toList(); val requestGeneration = ++generation
         executor.execute {
@@ -165,7 +272,7 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (isFinishing || isDestroyed || requestGeneration != generation) return@runOnUiThread
                 busy = false; send.isEnabled = true; send.text = "Enviar"
-                result.fold(onSuccess = { answer -> messages.add("assistant" to answer); addMessage("assistant", answer) }, onFailure = { error ->
+                result.fold(onSuccess = { answer -> messages.add("assistant" to answer); addMessage("assistant", answer); saveCurrentChat() }, onFailure = { error ->
                     if (messages.lastOrNull()?.first == "user") messages.removeAt(messages.lastIndex)
                     composer.setText(content)
                     addMessage("error", "No se pudo obtener una respuesta. ${error.message ?: "Error de conexión."}")
