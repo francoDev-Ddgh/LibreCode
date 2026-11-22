@@ -33,6 +33,7 @@ android {
             if (!System.getenv("RELEASE_KEYSTORE_PATH").isNullOrBlank()) signingConfig = signingConfigs.getByName("releaseSigning")
         }
     }
+    packaging { jniLibs { useLegacyPackaging = true; keepDebugSymbols += "**/*.so" } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
 }

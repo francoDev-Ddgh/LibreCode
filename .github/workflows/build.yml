@@ -43,6 +43,8 @@ jobs:
           echo "RELEASE_KEYSTORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
           echo "RELEASE_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
           echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+      - name: Prepare pinned native tools
+        run: python3 .github/scripts/prepare-native-tools.py
       - name: Assemble optimized release
         run: gradle --no-daemon :app:testReleaseUnitTest :app:assembleRelease
       - name: Publish release APK
